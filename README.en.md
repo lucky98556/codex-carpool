@@ -12,6 +12,10 @@
 
 The panel is a right-side content page. CPA / CPAMP continues to own the left navigation, authentication files, API Keys, and theme; this plugin owns only its SQLite policies, official quota snapshots, usage buckets, and compact audit logs.
 
+## Interface preview
+
+![codex-carpool management panel in English](docs/screenshots/panel-en-US.png)
+
 ## Highlights
 
 - Operator-defined shared account capacities such as `1x` and `20x`.

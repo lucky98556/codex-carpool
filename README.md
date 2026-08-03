@@ -14,6 +14,10 @@
 
 未配置策略的 CPA Key 保持原行为并直接走 CPA 调度；只有被纳入管理的 Key 才会进入插件的模型、时段、额度和账号选择链路。
 
+## 界面预览
+
+![codex-carpool 中文管理面板](docs/screenshots/panel-zh-CN.png)
+
 ## 核心能力
 
 - **共享账号池**：从 CPA 认证目录发现 Codex 账号，支持批量配置 `1x`、`20x` 等管理员定义容量。
