@@ -58,9 +58,10 @@ import (
 )
 
 const (
-	pluginName           = "codex-carpool"
-	apiPrefix            = "/v0/management/" + pluginName
-	requestContextHeader = "X-Codex-Carpool-Request-ID"
+	pluginName             = "codex-carpool"
+	pluginGitHubRepository = "https://github.com/lucky98556/codex-carpool"
+	apiPrefix              = "/v0/management/" + pluginName
+	requestContextHeader   = "X-Codex-Carpool-Request-ID"
 	// Native shutdown has no host-side timeout. Keep a short plugin-owned
 	// drain window, then preserve durable reservations and release CPA instead
 	// of holding a reload or process stop until an upstream weekly reset.
@@ -747,7 +748,7 @@ func pluginRegistration() registration {
 			Name:             pluginName,
 			Version:          pluginVersion,
 			Author:           "CLIProxyAPI community",
-			GitHubRepository: "https://github.com/router-for-me/CLIProxyAPI",
+			GitHubRepository: pluginGitHubRepository,
 		},
 		Capabilities: registrationCapability{Scheduler: true, UsagePlugin: true, RequestInterceptor: true, ManagementAPI: true},
 	}

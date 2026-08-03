@@ -177,6 +177,9 @@ func TestManagementRegistrationUsesRequestedChineseMenuName(t *testing.T) {
 
 func TestPluginRegistrationAndRequestInterceptorCleanup(t *testing.T) {
 	registration := pluginRegistration()
+	if registration.Metadata.GitHubRepository != pluginGitHubRepository {
+		t.Fatalf("plugin repository = %q, want %q", registration.Metadata.GitHubRepository, pluginGitHubRepository)
+	}
 	if !registration.Capabilities.RequestInterceptor {
 		t.Fatal("plugin registration must enable the native request interceptor")
 	}

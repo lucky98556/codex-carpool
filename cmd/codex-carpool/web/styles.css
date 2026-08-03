@@ -109,8 +109,12 @@
 .cc-panel .connection{font-size:13px}
 .cc-panel .utility-actions{gap:9px}
 .cc-panel .heading{margin:15px 2px 15px}
-.cc-panel .heading h1{color:var(--cc-ink);font-size:27px;font-weight:760;letter-spacing:-.55px}
+.cc-panel .heading h1{display:inline-flex;align-items:center;color:var(--cc-ink);font-size:27px;font-weight:760;letter-spacing:-.55px}
 .cc-panel .heading h1 span{margin-left:8px;background:var(--cc-primary-soft);color:var(--cc-primary-strong);font-size:12px}
+.cc-panel .heading h1 .github-link{display:inline-flex;align-items:center;justify-content:center;width:30px;height:30px;margin-left:5px;border-radius:9px;color:var(--cc-muted);text-decoration:none!important;transition:background-color .16s ease,color .16s ease,transform .16s ease}
+.cc-panel .heading h1 .github-link:hover{background:var(--cc-primary-soft);color:var(--cc-primary-strong);transform:translateY(-1px)}
+.cc-panel .heading h1 .github-link:focus-visible{outline:3px solid rgba(22,138,103,.2);outline-offset:1px}
+.cc-panel .heading h1 .github-link .cc-icon{width:20px;height:20px}
 .cc-panel .heading p{margin-top:7px;color:var(--cc-muted);font-size:14px}
 .cc-panel .card{border-color:color-mix(in srgb,var(--line,#e5e0ef) 90%,var(--cc-primary));border-radius:16px;box-shadow:0 10px 30px rgba(26,77,60,.06)}
 .cc-panel .stats{gap:15px;margin-bottom:15px}
