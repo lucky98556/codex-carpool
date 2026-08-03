@@ -43,16 +43,17 @@ type WindowSnapshot struct {
 }
 
 type KeySnapshot struct {
-	ID                string         `json:"id"`
-	Name              string         `json:"name"`
-	FingerprintPrefix string         `json:"fingerprint_prefix"`
-	Enabled           bool           `json:"enabled"`
-	AllowedModels     []string       `json:"allowed_models"`
-	NeedsRebind       bool           `json:"needs_rebind"`
-	AllocationX       float64        `json:"allocation_x"`
-	AccessRules       []AccessRule   `json:"access_rules"`
-	AccessTimezone    string         `json:"access_timezone"`
-	Allocation        WindowSnapshot `json:"allocation"`
+	ID                string              `json:"id"`
+	Name              string              `json:"name"`
+	FingerprintPrefix string              `json:"fingerprint_prefix"`
+	KeySuffix         string              `json:"key_suffix,omitempty"`
+	Enabled           bool                `json:"enabled"`
+	AllowedModels     []string            `json:"allowed_models"`
+	NeedsRebind       bool                `json:"needs_rebind"`
+	AllocationX       float64             `json:"allocation_x"`
+	AccessRules       []AccessRule        `json:"access_rules"`
+	AccessTimezone    string              `json:"access_timezone"`
+	Allocation        WindowSnapshot      `json:"allocation"`
 	ActualTokens      ActualTokenSnapshot `json:"actual_tokens"`
 }
 
@@ -209,7 +210,7 @@ type QuotaDebugAccountWindow struct {
 	OfficialWeeklyRemainingPercent *float64   `json:"official_weekly_remaining_percent,omitempty"`
 	OfficialWeeklyGuardTokens      int64      `json:"official_weekly_guard_tokens"`
 	OfficialWeeklyGuardX           float64    `json:"official_weekly_guard_x"`
-	ProvisionalLimitX               float64    `json:"provisional_limit_x"`
+	ProvisionalLimitX              float64    `json:"provisional_limit_x"`
 	OfficialSnapshotObservedAt     *time.Time `json:"official_snapshot_observed_at,omitempty"`
 	EstimatedTokensPerX            int64      `json:"estimated_tokens_per_x"`
 	CalibrationSamples             int64      `json:"calibration_samples"`
@@ -519,6 +520,7 @@ func (engine *Engine) Summary(now time.Time) SummarySnapshot {
 			ID:                policy.ID,
 			Name:              policy.Name,
 			FingerprintPrefix: fingerprint,
+			KeySuffix:         policy.KeySuffix,
 			Enabled:           policy.Enabled,
 			AllowedModels:     append([]string(nil), policy.AllowedModels...),
 			NeedsRebind:       policy.NeedsRebind,
@@ -995,9 +997,11 @@ func (engine *Engine) UpsertPolicy(policy KeyPolicy, rawAPIKey string) (KeyPolic
 	engine.configMu.RUnlock()
 	if rawAPIKey != "" {
 		policy.KeySHA256 = FingerprintAPIKey(rawAPIKey, cfg.KeyHMACSecret)
+		policy.KeySuffix = APIKeySuffix(rawAPIKey)
 		policy.FingerprintScheme = hmacFingerprintScheme
 	} else if exists {
 		policy.KeySHA256 = existing.KeySHA256
+		policy.KeySuffix = existing.KeySuffix
 		policy.FingerprintScheme = existing.FingerprintScheme
 	}
 	validated, err := normalizePolicy(policy, nil, cfg.RequestUnits)
@@ -1602,6 +1606,22 @@ func (engine *Engine) ClearDecisionLogs(keyID string) error {
 		return fmt.Errorf("flush decision logs before clear: %w", err)
 	}
 	return engine.store.ClearDecisionLogs(keyID)
+}
+
+// ClearForbiddenDecisionLogs removes dedicated forbidden-content audit rows.
+// An empty Key ID clears this log category globally; other usage, policy,
+// settlement, and runtime logs stay intact.
+func (engine *Engine) ClearForbiddenDecisionLogs(keyID string) error {
+	if engine == nil {
+		return fmt.Errorf("codex-carpool is not initialized")
+	}
+	keyID = strings.TrimSpace(keyID)
+	engine.adminMu.Lock()
+	defer engine.adminMu.Unlock()
+	if err := engine.flushPending(); err != nil {
+		return fmt.Errorf("flush forbidden-content logs before clear: %w", err)
+	}
+	return engine.store.ClearForbiddenDecisionLogs(keyID)
 }
 
 // OperationalLogs is intentionally separate from Key decision logs so the

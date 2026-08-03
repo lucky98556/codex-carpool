@@ -378,6 +378,8 @@ func localizedAdmissionMessage(language, code, fallback string) string {
 		chinese, english = "当前时间不在此 Key 允许访问的时段内。", "The current time is outside this API Key's allowed access schedule."
 	case "model_not_allowed":
 		chinese, english = "此 Key 不允许使用所请求的模型。", "This API Key is not allowed to use the requested model."
+	case "content_forbidden":
+		chinese, english = "请求内容触发违禁词策略，已拒绝处理。", "The request was rejected because it matched the forbidden-phrase policy."
 	case "quota_account_source_conflict":
 		chinese, english = "共享账号身份正在核验或存在冲突，受控 Key 已暂停。", "Shared account identities are being verified or have a conflict; managed API Keys are paused."
 	case "quota_persistence_unavailable":
@@ -489,6 +491,10 @@ type accountRequest struct {
 
 type accountsRequest struct {
 	Accounts []quota.AccountPoolEntry `json:"accounts"`
+}
+
+type contentFilterRequest struct {
+	Settings quota.ContentFilterSettings `json:"settings"`
 }
 
 var runtime struct {
@@ -677,6 +683,10 @@ func handleMethod(method string, request []byte) ([]byte, error) {
 				{Method: http.MethodGet, Path: "/" + pluginName + "/debug/quota", Description: "Returns a copy-safe local Token-guard and official-week allocation diagnosis for one Key."},
 				{Method: http.MethodGet, Path: "/" + pluginName + "/operation-logs", Description: "Lists plugin runtime and error logs."},
 				{Method: http.MethodDelete, Path: "/" + pluginName + "/operation-logs", Description: "Clears plugin runtime and error logs without changing Key usage or quota."},
+				{Method: http.MethodGet, Path: "/" + pluginName + "/content-filter", Description: "Returns the optional literal forbidden-phrase filter and its built-in/custom terms."},
+				{Method: http.MethodPut, Path: "/" + pluginName + "/content-filter", Description: "Atomically enables, disables, or updates literal forbidden-phrase filtering."},
+				{Method: http.MethodGet, Path: "/" + pluginName + "/forbidden-logs", Description: "Filters and pages dedicated forbidden-phrase interception logs."},
+				{Method: http.MethodDelete, Path: "/" + pluginName + "/forbidden-logs", Description: "Clears forbidden-phrase interception logs for one Key or all Keys without changing quota or other logs."},
 				{Method: http.MethodGet, Path: "/" + pluginName + "/models", Description: "Lists the CPA-synchronized Codex model catalog."},
 				{Method: http.MethodPut, Path: "/" + pluginName + "/models", Description: "Replaces the CPA-synchronized Codex model catalog."},
 				{Method: http.MethodGet, Path: "/" + pluginName + "/accounts", Description: "Lists the independent Codex shared account pool and official quota snapshots."},
@@ -687,7 +697,7 @@ func handleMethod(method string, request []byte) ([]byte, error) {
 				{Method: http.MethodPost, Path: "/" + pluginName + "/accounts/refresh", Description: "Schedules an official quota refresh without using the model proxy path."},
 			},
 			Resources: []resourceRoute{{
-				Path:        "/panel",
+				Path: "/panel",
 				// CPA's registration ABI does not include a locale or menu-i18n map.
 				// Use the Chinese product name requested for the current CPAMP menu;
 				// the panel itself still follows CPA's live Chinese/English locale.
@@ -1035,6 +1045,35 @@ func handleManagement(raw []byte) ([]byte, error) {
 			return fail(http.StatusInternalServerError, errors.New("clear operational logs failed"))
 		}
 		return managementJSON(http.StatusOK, map[string]string{"status": "ok"})
+	case path == apiPrefix+"/content-filter" && method == http.MethodGet:
+		return managementJSON(http.StatusOK, map[string]any{"settings": engine.ContentFilterSettings()})
+	case path == apiPrefix+"/content-filter" && method == http.MethodPut:
+		var payload contentFilterRequest
+		if err := json.Unmarshal(request.Body, &payload); err != nil {
+			return fail(http.StatusBadRequest, errors.New("invalid JSON body"))
+		}
+		settings, err := engine.ConfigureContentFilter(payload.Settings)
+		if err != nil {
+			return fail(http.StatusBadRequest, err)
+		}
+		engine.LogOperational("info", "content_filter_updated", fmt.Sprintf("违禁词拦截已更新：启用=%t，词条=%d", settings.Enabled, len(settings.Terms)), "", "")
+		return managementJSON(http.StatusOK, map[string]any{"settings": settings})
+	case path == apiPrefix+"/forbidden-logs" && method == http.MethodGet:
+		pageSize := strings.TrimSpace(request.Query.Get("page_size"))
+		if pageSize == "" {
+			pageSize = request.Query.Get("limit")
+		}
+		logs, err := engine.DecisionLogPage(strings.TrimSpace(request.Query.Get("key_id")), "forbidden", strings.TrimSpace(request.Query.Get("query")), parsePage(request.Query.Get("page")), parseLogPageSize(pageSize))
+		if err != nil {
+			return fail(http.StatusBadRequest, err)
+		}
+		return managementJSON(http.StatusOK, logs)
+	case path == apiPrefix+"/forbidden-logs" && method == http.MethodDelete:
+		keyID := strings.TrimSpace(request.Query.Get("key_id"))
+		if err := engine.ClearForbiddenDecisionLogs(keyID); err != nil {
+			return fail(http.StatusBadRequest, err)
+		}
+		return managementJSON(http.StatusOK, map[string]string{"status": "ok"})
 	case path == apiPrefix+"/models" && method == http.MethodGet:
 		models, err := engine.Models()
 		if err != nil {
@@ -1323,7 +1362,7 @@ func errorEnvelope(code, message string) []byte {
 // real HTTP 429 rather than an indistinguishable scheduler failure.
 func admissionStatusCode(code string) int {
 	switch code {
-	case "model_not_allowed", "access_schedule_closed":
+	case "model_not_allowed", "access_schedule_closed", "content_forbidden":
 		return http.StatusForbidden
 	case "quota_pool_unconfigured", "quota_snapshot_unavailable", "quota_candidate_mismatch", "quota_account_unavailable", "quota_scheduler_candidates_required", "quota_unavailable", "quota_account_source_conflict", "quota_persistence_unavailable":
 		// SQLite/accounting recovery is a temporary plugin outage, never a

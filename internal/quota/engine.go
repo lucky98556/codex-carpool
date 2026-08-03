@@ -85,16 +85,19 @@ type UsageEvent struct {
 // user-authored text only; raw request bodies, system/tool content, response
 // bodies, raw API Keys, and OAuth credentials are never stored.
 type DecisionLog struct {
-	ID             int64     `json:"id"`
-	KeyID          string    `json:"key_id"`
-	AuthID         string    `json:"auth_id"`
-	Model          string    `json:"model"`
-	RequestContent string    `json:"request_content,omitempty"`
-	RequestedAt    time.Time `json:"requested_at"`
-	Decision       string    `json:"decision"`
-	StatusCode     int       `json:"status_code"`
-	Reason         string    `json:"reason"`
-	Units          int64     `json:"units"`
+	ID              int64     `json:"id"`
+	KeyID           string    `json:"key_id"`
+	KeySuffix       string    `json:"key_suffix,omitempty"`
+	AuthID          string    `json:"auth_id"`
+	Model           string    `json:"model"`
+	RequestContent  string    `json:"request_content,omitempty"`
+	MatchedTerm     string    `json:"matched_term,omitempty"`
+	MatchedCategory string    `json:"matched_category,omitempty"`
+	RequestedAt     time.Time `json:"requested_at"`
+	Decision        string    `json:"decision"`
+	StatusCode      int       `json:"status_code"`
+	Reason          string    `json:"reason"`
+	Units           int64     `json:"units"`
 }
 
 // OperationalLog records plugin lifecycle and background work separately from
@@ -494,15 +497,18 @@ type Engine struct {
 	capturedRequestContent map[string]capturedRequestContent
 	pendingRequestContent  map[allocationBucketKey][]pendingRequestContent
 	pendingRequestCount    int
-	pendingShards              [pendingShardCount]pendingShard
-	pendingBucketCount         atomic.Int64
-	pendingLogCount            atomic.Int64
-	droppedDecisionLogs        atomic.Uint64
-	flushMu                    sync.Mutex
-	usageRecordsMu             sync.Mutex
-	lastUsageRecordsFlush      time.Time
-	flushStop                  chan struct{}
-	flushDone                  chan struct{}
+	contentFilterMu        sync.RWMutex
+	contentFilterSettings  ContentFilterSettings
+	contentFilterMatcher   *contentFilterMatcher
+	pendingShards          [pendingShardCount]pendingShard
+	pendingBucketCount     atomic.Int64
+	pendingLogCount        atomic.Int64
+	droppedDecisionLogs    atomic.Uint64
+	flushMu                sync.Mutex
+	usageRecordsMu         sync.Mutex
+	lastUsageRecordsFlush  time.Time
+	flushStop              chan struct{}
+	flushDone              chan struct{}
 	// admissionsClosed stops new scheduler decisions while still allowing
 	// already-admitted requests to publish their terminal usage. usageClosed is
 	// set only after those records have drained, immediately before workers are
@@ -576,6 +582,11 @@ func Open(cfg RuntimeConfig) (*Engine, error) {
 		_ = store.Close()
 		return nil, err
 	}
+	contentFilterSettings, err := store.LoadContentFilterSettings()
+	if err != nil {
+		_ = store.Close()
+		return nil, err
+	}
 	events, err := store.LoadMeteringSince(time.Now().UTC().Add(-sevenDayWindow))
 	if err != nil {
 		_ = store.Close()
@@ -626,6 +637,8 @@ func Open(cfg RuntimeConfig) (*Engine, error) {
 		pendingSettlementsByBucket: make(map[allocationBucketKey]int64),
 		capturedRequestContent:     make(map[string]capturedRequestContent),
 		pendingRequestContent:      make(map[allocationBucketKey][]pendingRequestContent),
+		contentFilterSettings:      contentFilterSettings,
+		contentFilterMatcher:       compileContentFilterMatcher(contentFilterSettings.Terms),
 		recentUsageCallbacks:       make(map[string]time.Time),
 		allocationMutations:        make(chan allocationMutation, maxPendingAllocationMutations),
 		allocationStop:             make(chan struct{}),
@@ -2120,7 +2133,14 @@ func (engine *Engine) admit(rawAPIKey, model, captureID string, now time.Time, c
 	if !found || !policy.Enabled {
 		return bypass()
 	}
-	requestContent := engine.claimCapturedRequestContent(captureID, keyID, now)
+	captured := engine.claimCapturedRequestContent(captureID, keyID, now)
+	requestContent := captured.Content
+	if captured.Match.Matched {
+		result := deny("content_forbidden", "The request contains a blocked phrase")
+		result.KeyID = keyID
+		engine.enqueueDecision(DecisionLog{KeyID: keyID, Model: model, RequestContent: requestContent, MatchedTerm: captured.Match.Term, MatchedCategory: captured.Match.Category, RequestedAt: now.UTC(), Decision: "blocked", StatusCode: httpStatusForbidden, Reason: result.Code})
+		return result
+	}
 	if !policy.AllowsAt(now) {
 		result := deny("access_schedule_closed", "This API key is outside its configured access schedule")
 		result.KeyID = keyID
@@ -2606,6 +2626,13 @@ func (engine *Engine) enqueueBuckets(event UsageEvent) bool {
 func (engine *Engine) enqueueDecision(entry DecisionLog) {
 	if entry.KeyID == "" || engine == nil || engine.usageClosed.Load() {
 		return
+	}
+	// Freeze the original CPA Key suffix at request time. Looking it up only
+	// while rendering would relabel old logs after a policy is rebound.
+	if entry.KeySuffix == "" {
+		engine.policiesMu.RLock()
+		entry.KeySuffix = engine.policiesByID[entry.KeyID].KeySuffix
+		engine.policiesMu.RUnlock()
 	}
 	if engine.reserveDecisionLogSlots(1) != 1 {
 		engine.droppedDecisionLogs.Add(1)

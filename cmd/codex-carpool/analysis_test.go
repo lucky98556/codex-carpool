@@ -31,10 +31,10 @@ func TestManagementLanguageFollowsForwardedCPAHeader(t *testing.T) {
 
 func TestManagementErrorsUseStableCodeAndCPAEnglishOrChinese(t *testing.T) {
 	tests := []struct {
-		cause       string
-		code        string
-		chinese     string
-		english     string
+		cause   string
+		code    string
+		chinese string
+		english string
 	}{
 		{
 			cause:   "Key allocation 5.00x exceeds the remaining shared pool 1.00x",
@@ -163,15 +163,23 @@ func TestManagementRegistrationUsesRequestedChineseMenuName(t *testing.T) {
 	if len(registration.Resources) != 1 || registration.Resources[0].Menu != "Codex 拼车" {
 		t.Fatalf("registered menu = %#v, want Codex 拼车", registration.Resources)
 	}
-	resetRegistered := false
+	expectedRoutes := map[string]bool{
+		http.MethodPost + " /codex-carpool/keys/reset":       false,
+		http.MethodGet + " /codex-carpool/content-filter":    false,
+		http.MethodPut + " /codex-carpool/content-filter":    false,
+		http.MethodGet + " /codex-carpool/forbidden-logs":    false,
+		http.MethodDelete + " /codex-carpool/forbidden-logs": false,
+	}
 	for _, route := range registration.Routes {
-		if route.Method == http.MethodPost && route.Path == "/codex-carpool/keys/reset" {
-			resetRegistered = true
-			break
+		key := route.Method + " " + route.Path
+		if _, ok := expectedRoutes[key]; ok {
+			expectedRoutes[key] = true
 		}
 	}
-	if !resetRegistered {
-		t.Fatalf("management routes = %#v, want POST /codex-carpool/keys/reset", registration.Routes)
+	for route, registered := range expectedRoutes {
+		if !registered {
+			t.Fatalf("management routes = %#v, want %s", registration.Routes, route)
+		}
 	}
 }
 

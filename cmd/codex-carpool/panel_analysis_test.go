@@ -112,17 +112,18 @@ func TestPanelIncludesDateAnalysisAndAccessScheduleControls(t *testing.T) {
 		`applyLogCellTitles(document.getElementById('logs'))`,
 		`applyLogCellTitles(document.getElementById('operation-logs'))`,
 		`id="decision-log-tools"`,
+		`id="forbidden-log-tools" hidden`,
 		`id="operation-log-tools" hidden`,
 		`.cc-panel .log-tools[hidden]{display:none!important}`,
-		`if(decisionTools)decisionTools.hidden=tab!=='decision'`,
-		`if(operationTools)operationTools.hidden=tab!=='operation'`,
+		`for(const name of validTabs){const selected=name===tab`,
+		`if(view)view.hidden=!selected;if(tools)tools.hidden=!selected`,
 		`class="log-action-column"`,
 		`.cc-panel .decision-log-table th.log-action-column,.cc-panel .decision-log-table td.log-action{position:sticky!important`,
 		`document.addEventListener('click',event=>{const target=event.target instanceof Element?event.target.closest('[data-log-tab]'):null;`,
 		`window.__ccActivateLogTab=activate`,
 		`document.dispatchEvent(new CustomEvent('codex-carpool:log-tab-changed',{detail:{tab}}))`,
 		`document.addEventListener('codex-carpool:log-tab-changed',()=>requestAnimationFrame(installVisibleTables))`,
-		`#policy-dialog[open],#account-dialog[open],#auth-directory-dialog[open],#log-detail-dialog[open],#quota-debug-dialog[open]{display:flex;flex-direction:column}`,
+		`#policy-dialog[open],#account-dialog[open],#auth-directory-dialog[open],#log-detail-dialog[open],#content-filter-dialog[open],#quota-debug-dialog[open]{display:flex;flex-direction:column}`,
 		`#policy-dialog .form-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}`,
 		`#policy-dialog::backdrop`,
 		`row.onkeydown=event=>{if(event.target!==row)return;`,
@@ -141,7 +142,7 @@ func TestPanelIncludesDateAnalysisAndAccessScheduleControls(t *testing.T) {
 		`面板数据已刷新。`,
 		`Dashboard data refreshed.`,
 		`const toastKey=(ok?'ok:':'error:')+String(value)`,
-		`const dialogMessageIDs=['policy-dialog','account-dialog','auth-directory-dialog','quota-debug-dialog']`,
+		`const dialogMessageIDs=['policy-dialog','account-dialog','auth-directory-dialog','content-filter-dialog','quota-debug-dialog']`,
 		`class="dialog-message" role="alert" aria-live="assertive" hidden`,
 		`.dialog-message[hidden]{display:none}`,
 		`className='account-capacity-field'`,
@@ -151,6 +152,21 @@ func TestPanelIncludesDateAnalysisAndAccessScheduleControls(t *testing.T) {
 		`if(typeof window.__ccRenderAnalysis==='function'){window.__ccRenderAnalysis();return}`,
 		`window.__ccRenderAnalysis=render`,
 		`.cc-panel .legacy-key-detail{width:100%;min-width:0}`,
+		`id="content-filter-open"`,
+		`id="content-filter-enabled"`,
+		`id="content-filter-search"`,
+		`class="content-filter-list-head"`,
+		`class="content-filter-value"`,
+		`#content-filter-dialog{box-sizing:border-box!important;display:none!important;width:min(820px,calc(100vw - 32px))!important`,
+		`#content-filter-dialog>footer{display:flex!important;flex:0 0 auto!important;align-items:center!important;justify-content:flex-end!important`,
+		`id="quota-debug-open"`,
+		`id="forbidden-log-view" class="log-view" hidden`,
+		`id="forbidden-search"`,
+		`id="forbidden-clear"`,
+		`api('/content-filter')`,
+		`api('/forbidden-logs?'+params)`,
+		`['CPA Key 尾号','CPA Key suffix']`,
+		`key?.key_suffix`,
 	} {
 		if !strings.Contains(page, expected) {
 			t.Fatalf("panel HTML missing %q", expected)
@@ -158,6 +174,9 @@ func TestPanelIncludesDateAnalysisAndAccessScheduleControls(t *testing.T) {
 	}
 	if strings.Contains(page, `uiText('待确认 +','Provisional +')`) {
 		t.Fatal("Key list must keep provisional usage in the analysis panel instead of repeating it in the table")
+	}
+	if strings.Contains(page, `const quotaDebugActions=document.querySelector('.page-head .actions')`) {
+		t.Fatal("quota diagnostics must be a stable utility action instead of a runtime-inserted button")
 	}
 	if strings.Contains(page, `id="window"`) {
 		t.Fatal("old trend-window selector should not remain after analysis controls replace it")
@@ -180,8 +199,8 @@ func TestPanelIncludesDateAnalysisAndAccessScheduleControls(t *testing.T) {
 	if strings.Contains(page, `id="message"`) || strings.Contains(page, `pageMessage=document.getElementById('message')`) || strings.Contains(page, `.cc-panel .message{`) {
 		t.Fatal("page-level inline messages must not compete with dialog feedback and top-right toasts")
 	}
-	if got := strings.Count(page, `class="dialog-message" role="alert" aria-live="assertive" hidden`); got != 4 {
-		t.Fatalf("dialog-local message containers = %d, want 4", got)
+	if got := strings.Count(page, `class="dialog-message" role="alert" aria-live="assertive" hidden`); got != 5 {
+		t.Fatalf("dialog-local message containers = %d, want 5", got)
 	}
 }
 
@@ -300,6 +319,9 @@ func TestPanelEnglishLocaleCoversStaticAndDynamicDashboardCopy(t *testing.T) {
 		`Configure shared account pool`,
 		`CPA authentication directory`,
 		`Pause management (unrestricted)`,
+		`Forbidden-phrase filtering`,
+		`Forbidden-phrase logs`,
+		`Original CPA Key suffix: `,
 	} {
 		if !strings.Contains(page, expected) {
 			t.Fatalf("panel HTML missing bilingual marker %q", expected)
@@ -316,6 +338,7 @@ func TestPanelUsesScopedBilingualLoadingFeedback(t *testing.T) {
 		`Loading usage analysis…`,
 		`Loading usage logs…`,
 		`Loading runtime logs…`,
+		`Loading forbidden-phrase logs…`,
 		`Refreshing official quota…`,
 		`selected!==state.selected`,
 		`requestID!==decisionRequestID`,

@@ -25,6 +25,7 @@
 - **官方额度同步**：直接读取 Codex 官方使用窗口、剩余比例和恢复时间，官方额度始终是账号池硬边界。
 - **自动账号切换**：优先选择容量加权后官方余量更充足的账号，耗尽账号会被跳过。
 - **模型限制**：模型目录由 CPA 自动同步；未选择模型时默认全部允许，越权模型返回 `403`。
+- **违禁词拦截**：可选的内存字面量匹配，默认关闭；支持内置高风险种子、自定义词条、独立拦截日志和 `403` 优先拒绝。
 - **访问时段**：可限制 Key 在指定日期、星期和时间段访问；未配置时不限制。
 - **用量分析**：提供单 Key 小时、日、月、年和自定义区间统计，展示实际 Token、请求次数和趋势。
 - **独立日志**：使用与策略日志、插件运行与错误日志独立分页、筛选和清理；重置额度不会清除日志。
@@ -37,7 +38,9 @@
 flowchart LR
     K["下游 CPA Key"] --> P{"是否配置并启用插件策略"}
     P -- 否 --> N["CPA 原调度链路"]
-    P -- 是 --> T{"访问时段允许"}
+    P -- 是 --> F{"命中已启用的违禁词"}
+    F -- 是 --> E403C["HTTP 403"]
+    F -- 否 --> T{"访问时段允许"}
     T -- 否 --> E403A["HTTP 403"]
     T -- 是 --> M{"模型允许"}
     M -- 否 --> E403B["HTTP 403"]
@@ -64,8 +67,9 @@ flowchart LR
 
 - 插件从 CPA 的文件型 `auth-dir` 只读发现 Codex 认证文件。
 - OAuth Token 只用于带超时的官方额度请求，不写入 SQLite，也不返回浏览器。
-- 原始 CPA API Key 不持久化；插件只保存 HMAC 指纹和管理备注。
+- 原始 CPA API Key 不持久化；插件只保存 HMAC 指纹、管理备注和用于辨认的原始 Key 最后 4 位。升级前的旧策略需重新绑定一次才会显示正确尾号。
 - 决策日志最多保存最后一条用户文本的 2,000 个 Unicode 字符，不保存系统、开发者、工具、文件、图片或模型响应正文。
+- 违禁词主开关默认关闭；启用后仅对受管 Key 的用户文本做不区分大小写的字面量包含匹配，不执行正则，也不能替代完整内容审核。
 - 官方额度请求不进入 CPA 的模型代理、请求监控或下游用量链路。
 - 插件数据目录使用单实例文件锁，不应由多个 CPA 实例共享。
 
@@ -158,6 +162,8 @@ plugins:
 | GET | `/v0/management/codex-carpool/analysis?key_id=...` | 单 Key 实际 Token 分析 |
 | GET / DELETE | `/v0/management/codex-carpool/logs?key_id=...` | 使用与策略日志 |
 | GET / DELETE | `/v0/management/codex-carpool/operation-logs` | 插件运行与错误日志 |
+| GET / PUT | `/v0/management/codex-carpool/content-filter` | 违禁词主开关、内置种子和自定义词条 |
+| GET / DELETE | `/v0/management/codex-carpool/forbidden-logs` | 独立分页、检索和清理违禁词拦截日志 |
 | GET / PUT | `/v0/management/codex-carpool/models` | CPA Codex 模型目录 |
 | GET / PUT / DELETE | `/v0/management/codex-carpool/accounts` | 共享账号池配置 |
 | GET | `/v0/management/codex-carpool/accounts/discover` | 可配置的 CPA Codex 账号 |

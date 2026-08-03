@@ -11,6 +11,7 @@ import (
 const (
 	maxCapturedRequestBodyBytes = 4 << 20
 	maxRequestContentRunes      = 2_000
+	maxContentFilterScanRunes   = 64_000
 	capturedRequestContentTTL   = 2 * time.Minute
 	pendingRequestContentTTL    = 2 * time.Hour
 	maxCapturedRequestContent   = 4_096
@@ -21,6 +22,7 @@ type capturedRequestContent struct {
 	KeyID      string
 	Model      string
 	Content    string
+	Match      ContentFilterMatch
 	CapturedAt time.Time
 }
 
@@ -63,10 +65,12 @@ func (engine *Engine) CaptureRequestContent(rawAPIKey, model string, body []byte
 	if fingerprint == "" || !found || !policy.Enabled {
 		return ""
 	}
-	content := extractUserRequestContent(body)
-	if content == "" {
+	scanContent := extractUserRequestContentWithLimit(body, maxContentFilterScanRunes)
+	if scanContent == "" {
 		return ""
 	}
+	content := normalizeRequestContent(scanContent)
+	match := engine.matchForbiddenContent(scanContent)
 	var random [16]byte
 	if _, err := rand.Read(random[:]); err != nil {
 		return ""
@@ -80,7 +84,7 @@ func (engine *Engine) CaptureRequestContent(rawAPIKey, model string, body []byte
 	engine.pruneRequestContentLocked(now)
 	if len(engine.capturedRequestContent) < maxCapturedRequestContent {
 		engine.capturedRequestContent[captureID] = capturedRequestContent{
-			KeyID: keyID, Model: strings.TrimSpace(model), Content: content, CapturedAt: now,
+			KeyID: keyID, Model: strings.TrimSpace(model), Content: content, Match: match, CapturedAt: now,
 		}
 	} else {
 		captureID = ""
@@ -89,23 +93,23 @@ func (engine *Engine) CaptureRequestContent(rawAPIKey, model string, body []byte
 	return captureID
 }
 
-func (engine *Engine) claimCapturedRequestContent(captureID, keyID string, now time.Time) string {
+func (engine *Engine) claimCapturedRequestContent(captureID, keyID string, now time.Time) capturedRequestContent {
 	captureID = strings.TrimSpace(captureID)
 	if engine == nil || captureID == "" || keyID == "" {
-		return ""
+		return capturedRequestContent{}
 	}
 	engine.requestContentMu.Lock()
 	defer engine.requestContentMu.Unlock()
 	engine.pruneRequestContentLocked(now.UTC())
 	captured, exists := engine.capturedRequestContent[captureID]
 	if !exists {
-		return ""
+		return capturedRequestContent{}
 	}
 	delete(engine.capturedRequestContent, captureID)
 	if captured.KeyID != keyID {
-		return ""
+		return capturedRequestContent{}
 	}
-	return captured.Content
+	return captured
 }
 
 func (engine *Engine) rememberPendingRequestContent(key allocationBucketKey, model, content string, requestedAt time.Time) {
@@ -218,25 +222,33 @@ func (engine *Engine) pruneRequestContentLocked(now time.Time) {
 }
 
 func extractUserRequestContent(body []byte) string {
+	return extractUserRequestContentWithLimit(body, maxRequestContentRunes)
+}
+
+func extractUserRequestContentWithLimit(body []byte, limit int) string {
 	var envelope requestContentEnvelope
 	if err := json.Unmarshal(body, &envelope); err != nil {
 		return ""
 	}
 	for index := len(envelope.Messages) - 1; index >= 0; index-- {
 		if strings.EqualFold(strings.TrimSpace(envelope.Messages[index].Role), "user") {
-			if content := requestMessageText(envelope.Messages[index]); content != "" {
+			if content := requestMessageTextWithLimit(envelope.Messages[index], limit); content != "" {
 				return content
 			}
 		}
 	}
-	if content := requestInputText(envelope.Input); content != "" {
+	if content := requestInputTextWithLimit(envelope.Input, limit); content != "" {
 		return content
 	}
-	return requestScalarText(envelope.Prompt)
+	return requestScalarTextWithLimit(envelope.Prompt, limit)
 }
 
 func requestInputText(raw json.RawMessage) string {
-	if content := requestScalarText(raw); content != "" {
+	return requestInputTextWithLimit(raw, maxRequestContentRunes)
+}
+
+func requestInputTextWithLimit(raw json.RawMessage, limit int) string {
+	if content := requestScalarTextWithLimit(raw, limit); content != "" {
 		return content
 	}
 	var messages []requestContentMessage
@@ -249,7 +261,7 @@ func requestInputText(raw json.RawMessage) string {
 		if role != "" && !strings.EqualFold(role, "user") {
 			continue
 		}
-		if content := requestMessageText(message); content != "" {
+		if content := requestMessageTextWithLimit(message, limit); content != "" {
 			return content
 		}
 	}
@@ -257,11 +269,15 @@ func requestInputText(raw json.RawMessage) string {
 }
 
 func requestMessageText(message requestContentMessage) string {
-	if content := requestScalarText(message.Content); content != "" {
+	return requestMessageTextWithLimit(message, maxRequestContentRunes)
+}
+
+func requestMessageTextWithLimit(message requestContentMessage, limit int) string {
+	if content := requestScalarTextWithLimit(message.Content, limit); content != "" {
 		return content
 	}
 	if message.Text != "" && (message.Type == "" || message.Type == "text" || message.Type == "input_text") {
-		return normalizeRequestContent(message.Text)
+		return normalizeRequestContentWithLimit(message.Text, limit)
 	}
 	var parts []requestContentMessage
 	if err := json.Unmarshal(message.Content, &parts); err != nil {
@@ -272,14 +288,18 @@ func requestMessageText(message requestContentMessage) string {
 		if part.Type != "" && part.Type != "text" && part.Type != "input_text" {
 			continue
 		}
-		if text := normalizeRequestContent(part.Text); text != "" {
+		if text := normalizeRequestContentWithLimit(part.Text, limit); text != "" {
 			texts = append(texts, text)
 		}
 	}
-	return normalizeRequestContent(strings.Join(texts, "\n"))
+	return normalizeRequestContentWithLimit(strings.Join(texts, "\n"), limit)
 }
 
 func requestScalarText(raw json.RawMessage) string {
+	return requestScalarTextWithLimit(raw, maxRequestContentRunes)
+}
+
+func requestScalarTextWithLimit(raw json.RawMessage, limit int) string {
 	if len(raw) == 0 {
 		return ""
 	}
@@ -287,17 +307,21 @@ func requestScalarText(raw json.RawMessage) string {
 	if err := json.Unmarshal(raw, &value); err != nil {
 		return ""
 	}
-	return normalizeRequestContent(value)
+	return normalizeRequestContentWithLimit(value, limit)
 }
 
 func normalizeRequestContent(value string) string {
+	return normalizeRequestContentWithLimit(value, maxRequestContentRunes)
+}
+
+func normalizeRequestContentWithLimit(value string, limit int) string {
 	value = strings.TrimSpace(strings.ReplaceAll(value, "\r\n", "\n"))
 	if value == "" {
 		return ""
 	}
 	runes := []rune(value)
-	if len(runes) > maxRequestContentRunes {
-		value = string(runes[:maxRequestContentRunes]) + "…"
+	if limit > 0 && len(runes) > limit {
+		value = string(runes[:limit]) + "…"
 	}
 	return value
 }

@@ -22,6 +22,7 @@ The panel is a right-side content page. CPA / CPAMP continues to own the left na
 - One global x allocation per managed CPA Key across all configured accounts.
 - Direct official quota synchronization and capacity-aware account switching.
 - Optional per-Key model allowlists and access schedules.
+- Optional in-memory literal forbidden-phrase filtering, disabled by default, with narrow built-in seeds, custom phrases, dedicated logs, and priority `403` rejection.
 - Hourly, daily, monthly, yearly, and custom-range usage analytics.
 - Separate policy/usage logs and plugin runtime/error logs.
 - Chinese and English UI that follows the CPA locale and theme.
@@ -39,13 +40,17 @@ The panel is a right-side content page. CPA / CPAMP continues to own the left na
 - An upstream Codex `429` with the official `usage_limit_reached` signal marks the selected account unavailable immediately and refreshes it in the background. Other transient `429` responses only trigger a refresh and do not freeze the shared pool. If no configured account has a usable official snapshot, the managed Key receives `429`; if snapshots have not been obtained yet, it receives `503` rather than risking a false allow.
 - The synchronizer runs at startup, when a request observes a stale snapshot, every five minutes, after an account change, and after `429`. It uses three bounded workers plus a global request spacing and a 30-second manual-refresh cooldown, so scheduler calls never wait for official quota I/O or create a polling burst. Manual refresh returns `202` only when at least one account was actually queued; unavailable, already-running, or queue-full accounts are returned explicitly.
 - Per-Key completed Token buckets and decision logs are independent plugin data. For managed Keys, a decision log may contain the latest user-authored text excerpt (maximum 2,000 Unicode characters) captured from that request. Raw request bodies, system/developer/tool content, files, images, responses, raw API Keys, and OAuth tokens are not stored.
+- Raw CPA API Keys are never persisted. The plugin stores the HMAC fingerprint and the original Key's final four characters for operator-facing identification; legacy policies show an unavailable suffix until they are rebound once.
+- Forbidden-phrase filtering is off by default. When enabled, it performs case-insensitive literal substring matching only on managed-Key user text, never regex evaluation; its narrow seeds are not a replacement for comprehensive content moderation.
 - Plugin lifecycle, account-pool changes, model synchronization, official-quota failures, recoveries, and exhaustion events are retained separately as operational logs. They are visible in the panel, share the configured retention period, and are deliberately rate-limited so a broken upstream link cannot create an unbounded write stream.
 
 ```mermaid
 flowchart LR
     K["Downstream CPA Key"] --> P{"Enabled plugin policy?"}
     P -- No --> N["CPA normal scheduler"]
-    P -- Yes --> M{"Model allowed?"}
+    P -- Yes --> F{"Enabled forbidden phrase matched?"}
+    F -- Yes --> E403F["HTTP 403"]
+    F -- No --> M{"Model allowed?"}
     M -- No --> E403["HTTP 403"]
     M -- Yes --> S{"Current official pool snapshot?"}
     S -- No snapshot --> E503["HTTP 503"]
@@ -99,6 +104,8 @@ The directory is created with `0700`; the SQLite/WAL database uses `0600` and a 
 | GET | `/v0/management/codex-carpool/analysis?key_id=...&from=...&to=...&granularity=day` | per-Key actual-Token analysis for day, month, year, or a custom range |
 | GET / DELETE | `/v0/management/codex-carpool/logs?key_id=...` | list or clear one Key's policy and completion logs without changing its quota |
 | GET / DELETE | `/v0/management/codex-carpool/operation-logs?level=error` | list or clear plugin runtime and error logs without changing Key quota |
+| GET / PUT | `/v0/management/codex-carpool/content-filter` | manage the forbidden-phrase switch, built-in seeds, and custom phrases |
+| GET / DELETE | `/v0/management/codex-carpool/forbidden-logs` | page, search, or clear dedicated forbidden-phrase interception logs |
 | GET / PUT | `/v0/management/codex-carpool/models` | CPA-synchronized Codex model catalog |
 | GET / PUT / DELETE | `/v0/management/codex-carpool/accounts` | configured shared-pool account entries |
 | GET | `/v0/management/codex-carpool/accounts/discover` | CPA Codex accounts that can be added |

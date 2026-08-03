@@ -14,3 +14,6 @@ data/
 
 # Local UI QA captures may contain deployment or account identifiers.
 design-assets/
+
+# Local portable toolchains are development-only and must not be published.
+.tools/go1.26.5/

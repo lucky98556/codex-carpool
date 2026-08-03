@@ -1,0 +1,4 @@
+interface:
+  display_name: "CPA 面板样式隔离"
+  short_description: "隔离 CPA 宿主样式，稳定插件弹窗、表格、按钮与双主题布局"
+  default_prompt: "Use $cpa-panel-style-isolation to implement or review CPA plugin UI changes without host style leakage."

@@ -56,7 +56,7 @@ type InstallationSettings struct {
 	RecordRetention string `json:"record_retention"`
 	// AuthDirectory is CPA's file-backed auth-dir. codex-carpool reads only
 	// Codex JSON files from this directory; it never writes CPA credentials.
-	AuthDirectory   string `json:"auth_directory"`
+	AuthDirectory string `json:"auth_directory"`
 }
 
 type storedInstallationSettings struct {
@@ -92,14 +92,18 @@ type AccountConfig struct {
 // when key_hmac_secret is configured. Raw client keys are accepted only by the
 // management API and are never saved or returned in plaintext.
 type KeyPolicy struct {
-	ID                 string   `yaml:"id" json:"id"`
-	Name               string   `yaml:"name" json:"name"`
-	KeySHA256          string   `yaml:"key_sha256" json:"-"`
+	ID        string `yaml:"id" json:"id"`
+	Name      string `yaml:"name" json:"name"`
+	KeySHA256 string `yaml:"key_sha256" json:"-"`
+	// KeySuffix is the final four characters of the original CPA API Key. It is
+	// display-only metadata: the complete Key is still never persisted or
+	// returned. Older rows remain empty until the operator rebinds them.
+	KeySuffix string `yaml:"key_suffix" json:"key_suffix,omitempty"`
 	// AllocationX is the Key's single share of the plugin-wide Codex pool. The
 	// official account windows remain independent and synchronized from Codex;
 	// AllocationX is charged against the selected account's official weekly
 	// reset window so a Key cannot consume more than its allocated share.
-	AllocationX        float64  `yaml:"allocation_x" json:"allocation_x"`
+	AllocationX float64 `yaml:"allocation_x" json:"allocation_x"`
 	// These fields exist only to read legacy database rows. The management API
 	// deliberately does not accept or return them: codex-carpool has one
 	// allocation_x, while Codex remains the source of both official windows.
@@ -109,8 +113,8 @@ type KeyPolicy struct {
 	// AccessRules is optional. An empty list preserves the original unrestricted
 	// behavior; otherwise the Key can be routed only during one of its weekly
 	// recurring intervals in AccessTimezone.
-	AccessRules       []AccessRule `yaml:"access_rules" json:"access_rules"`
-	AccessTimezone    string       `yaml:"access_timezone" json:"access_timezone"`
+	AccessRules    []AccessRule `yaml:"access_rules" json:"access_rules"`
+	AccessTimezone string       `yaml:"access_timezone" json:"access_timezone"`
 	// FingerprintScheme distinguishes HMAC fingerprints created by this plugin
 	// from copied legacy SHA-256 rows. Legacy rows stay paused until the operator
 	// rebinds the Key from CPA; they must never silently become active.
@@ -133,12 +137,12 @@ type KeyPolicy struct {
 // AuthIndex optionally preserves CPA's scheduler-facing credential ID when it
 // differs from the relative auth-file path.
 type AccountPoolEntry struct {
-	AuthID     string  `json:"auth_id"`
-	AuthIndex  string  `json:"auth_index"`
-	Name       string  `json:"name"`
-	CapacityX  float64 `json:"capacity_x"`
-	Enabled    bool    `json:"enabled"`
-	UpdatedAt  time.Time `json:"updated_at"`
+	AuthID    string    `json:"auth_id"`
+	AuthIndex string    `json:"auth_index"`
+	Name      string    `json:"name"`
+	CapacityX float64   `json:"capacity_x"`
+	Enabled   bool      `json:"enabled"`
+	UpdatedAt time.Time `json:"updated_at"`
 }
 
 // RuntimeConfig is the validated shape used by the scheduler hot path.
@@ -349,6 +353,7 @@ func normalizePolicy(policy KeyPolicy, groups map[string]AccountGroup, requestUn
 	policy.ID = strings.TrimSpace(policy.ID)
 	policy.Name = strings.TrimSpace(policy.Name)
 	policy.KeySHA256 = strings.ToLower(strings.TrimSpace(policy.KeySHA256))
+	policy.KeySuffix = normalizeAPIKeySuffix(policy.KeySuffix)
 	policy.FingerprintScheme = strings.TrimSpace(policy.FingerprintScheme)
 	if policy.ID == "" || policy.Name == "" || policy.KeySHA256 == "" {
 		return KeyPolicy{}, fmt.Errorf("id, name and key_sha256 are required")
@@ -409,6 +414,20 @@ func normalizePolicy(policy KeyPolicy, groups map[string]AccountGroup, requestUn
 		policy.MaxConcurrency = 1
 	}
 	return policy, nil
+}
+
+// APIKeySuffix returns only the display-safe final four characters of a CPA
+// API Key. It deliberately does not expose enough material to authenticate.
+func APIKeySuffix(raw string) string {
+	return normalizeAPIKeySuffix(raw)
+}
+
+func normalizeAPIKeySuffix(raw string) string {
+	runes := []rune(strings.TrimSpace(raw))
+	if len(runes) > 4 {
+		runes = runes[len(runes)-4:]
+	}
+	return string(runes)
 }
 
 func normalizeAccountPoolEntry(entry AccountPoolEntry) (AccountPoolEntry, error) {

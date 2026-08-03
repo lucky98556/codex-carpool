@@ -37,11 +37,11 @@ const (
 var openUsageAnalysisReader = sql.Open
 
 const (
-	installationSettingsMetadataName       = "installation_settings_v1"
-	accountGroupsMetadataName              = "account_groups_v1" // legacy migration only
-	usageAnalysisBackfillMetadataName      = "usage_analysis_backfill_v1"
-	keyActualTotalsBackfillMetadataName    = "key_actual_token_totals_backfill_v1"
-	alignedQuotaCalibrationMetadataName    = "official_quota_calibration_v2"
+	installationSettingsMetadataName    = "installation_settings_v1"
+	accountGroupsMetadataName           = "account_groups_v1" // legacy migration only
+	usageAnalysisBackfillMetadataName   = "usage_analysis_backfill_v1"
+	keyActualTotalsBackfillMetadataName = "key_actual_token_totals_backfill_v1"
+	alignedQuotaCalibrationMetadataName = "official_quota_calibration_v2"
 	// officialXLedgerMetadataName marks the one-time transition from the old
 	// Token-capacity allocation rows to official-percentage x accounting.
 	// Historical Token analytics remain intact; only the incompatible quota
@@ -248,6 +248,7 @@ CREATE TABLE IF NOT EXISTS key_policies (
   key_id TEXT PRIMARY KEY,
   name TEXT NOT NULL,
   key_sha256 TEXT NOT NULL UNIQUE,
+	key_suffix TEXT NOT NULL DEFAULT '',
   group_id TEXT NOT NULL DEFAULT '',
   five_hour_percent REAL NOT NULL DEFAULT 0,
   seven_day_percent REAL NOT NULL DEFAULT 0,
@@ -316,9 +317,12 @@ CREATE TABLE IF NOT EXISTS key_actual_token_totals (
 CREATE TABLE IF NOT EXISTS request_logs (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   key_id TEXT NOT NULL,
+  key_suffix TEXT NOT NULL DEFAULT '',
   auth_id TEXT NOT NULL,
   model TEXT NOT NULL,
   request_content TEXT NOT NULL DEFAULT '',
+	matched_term TEXT NOT NULL DEFAULT '',
+	matched_category TEXT NOT NULL DEFAULT '',
   requested_at INTEGER NOT NULL,
   decision TEXT NOT NULL,
   status_code INTEGER NOT NULL,
@@ -328,6 +332,22 @@ CREATE TABLE IF NOT EXISTS request_logs (
 CREATE INDEX IF NOT EXISTS idx_request_logs_key_requested ON request_logs(key_id, requested_at DESC);
 CREATE INDEX IF NOT EXISTS idx_request_logs_requested ON request_logs(requested_at DESC);
 CREATE INDEX IF NOT EXISTS idx_request_logs_decision_requested ON request_logs(decision, requested_at DESC);
+CREATE INDEX IF NOT EXISTS idx_request_logs_reason_requested ON request_logs(reason, requested_at DESC);
+CREATE TABLE IF NOT EXISTS content_filter_settings (
+  singleton INTEGER PRIMARY KEY CHECK(singleton = 1),
+  enabled INTEGER NOT NULL DEFAULT 0,
+  updated_at INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS content_filter_terms (
+  term_id TEXT PRIMARY KEY,
+  value TEXT NOT NULL,
+  normalized_value TEXT NOT NULL UNIQUE,
+  category TEXT NOT NULL,
+  source TEXT NOT NULL,
+  enabled INTEGER NOT NULL,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+);
 CREATE TABLE IF NOT EXISTS operational_logs (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   occurred_at INTEGER NOT NULL,
@@ -425,6 +445,9 @@ CREATE INDEX IF NOT EXISTS idx_key_account_allocation_window
 		return err
 	}
 	if err := store.ensureRequestLogColumns(); err != nil {
+		return err
+	}
+	if err := store.seedContentFilterLocked(); err != nil {
 		return err
 	}
 	if err := store.ensureAccountPoolColumns(); err != nil {
@@ -616,6 +639,7 @@ func (store *Store) ensurePolicyColumns() error {
 		{"access_rules_json", "TEXT NOT NULL DEFAULT '[]'"},
 		{"access_timezone", "TEXT NOT NULL DEFAULT ''"},
 		{"fingerprint_scheme", "TEXT NOT NULL DEFAULT ''"},
+		{"key_suffix", "TEXT NOT NULL DEFAULT ''"},
 		{"allocation_x", "REAL NOT NULL DEFAULT 0"},
 	} {
 		exists, err := store.columnExists("key_policies", column.name)
@@ -646,15 +670,25 @@ END`); err != nil {
 // ensureRequestLogColumns keeps existing plugin databases compatible while
 // allowing new releases to persist a bounded user-text excerpt per decision.
 func (store *Store) ensureRequestLogColumns() error {
-	exists, err := store.columnExists("request_logs", "request_content")
-	if err != nil {
-		return err
-	}
-	if exists {
-		return nil
-	}
-	if _, err := store.db.Exec(`ALTER TABLE request_logs ADD COLUMN request_content TEXT NOT NULL DEFAULT ''`); err != nil {
-		return fmt.Errorf("add request log content column: %w", err)
+	for _, column := range []struct {
+		name string
+		kind string
+	}{
+		{"key_suffix", "TEXT NOT NULL DEFAULT ''"},
+		{"request_content", "TEXT NOT NULL DEFAULT ''"},
+		{"matched_term", "TEXT NOT NULL DEFAULT ''"},
+		{"matched_category", "TEXT NOT NULL DEFAULT ''"},
+	} {
+		exists, err := store.columnExists("request_logs", column.name)
+		if err != nil {
+			return err
+		}
+		if exists {
+			continue
+		}
+		if _, err := store.db.Exec(`ALTER TABLE request_logs ADD COLUMN ` + column.name + ` ` + column.kind); err != nil {
+			return fmt.Errorf("add request log column %s: %w", column.name, err)
+		}
 	}
 	return nil
 }
@@ -1072,10 +1106,10 @@ func (store *Store) InsertMissingPolicies(policies []KeyPolicy) error {
 	}
 	statement, err := tx.Prepare(`
 INSERT INTO key_policies (
-  key_id, name, key_sha256, group_id, five_hour_percent, seven_day_percent,
+  key_id, name, key_sha256, key_suffix, group_id, five_hour_percent, seven_day_percent,
   max_concurrency, five_hour_multiplier, seven_day_multiplier, allowed_models_json,
 	  access_rules_json, access_timezone, fingerprint_scheme, allocation_x, enabled, created_at, updated_at
-) VALUES (?, ?, ?, '', 0, 0, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+) VALUES (?, ?, ?, ?, '', 0, 0, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(key_id) DO NOTHING`)
 	if err != nil {
 		_ = tx.Rollback()
@@ -1094,7 +1128,7 @@ ON CONFLICT(key_id) DO NOTHING`)
 			_ = tx.Rollback()
 			return fmt.Errorf("encode access rules for %q: %w", policy.ID, err)
 		}
-		if _, err := statement.Exec(policy.ID, policy.Name, policy.KeySHA256, policy.FiveHourMultiplier, policy.SevenDayMultiplier, string(models), string(rules), policy.AccessTimezone, policy.FingerprintScheme, policy.AllocationX, boolToInt(policy.Enabled), now, now); err != nil {
+		if _, err := statement.Exec(policy.ID, policy.Name, policy.KeySHA256, policy.KeySuffix, policy.FiveHourMultiplier, policy.SevenDayMultiplier, string(models), string(rules), policy.AccessTimezone, policy.FingerprintScheme, policy.AllocationX, boolToInt(policy.Enabled), now, now); err != nil {
 			_ = tx.Rollback()
 			return fmt.Errorf("insert bootstrap policy %q: %w", policy.ID, err)
 		}
@@ -1120,13 +1154,14 @@ func (store *Store) UpsertPolicy(policy KeyPolicy) error {
 	}
 	_, err = store.db.Exec(`
 INSERT INTO key_policies (
-  key_id, name, key_sha256, group_id, five_hour_percent, seven_day_percent,
+  key_id, name, key_sha256, key_suffix, group_id, five_hour_percent, seven_day_percent,
   max_concurrency, five_hour_multiplier, seven_day_multiplier, allowed_models_json,
 	  access_rules_json, access_timezone, fingerprint_scheme, allocation_x, enabled, created_at, updated_at
-) VALUES (?, ?, ?, '', 0, 0, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+) VALUES (?, ?, ?, ?, '', 0, 0, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(key_id) DO UPDATE SET
   name = excluded.name,
   key_sha256 = excluded.key_sha256,
+	key_suffix = excluded.key_suffix,
   five_hour_multiplier = excluded.five_hour_multiplier,
   seven_day_multiplier = excluded.seven_day_multiplier,
   allowed_models_json = excluded.allowed_models_json,
@@ -1136,7 +1171,7 @@ ON CONFLICT(key_id) DO UPDATE SET
   allocation_x = excluded.allocation_x,
   enabled = excluded.enabled,
   updated_at = excluded.updated_at`,
-		policy.ID, policy.Name, policy.KeySHA256, policy.FiveHourMultiplier, policy.SevenDayMultiplier,
+		policy.ID, policy.Name, policy.KeySHA256, policy.KeySuffix, policy.FiveHourMultiplier, policy.SevenDayMultiplier,
 		string(models), string(rules), policy.AccessTimezone, policy.FingerprintScheme, policy.AllocationX, boolToInt(policy.Enabled), now, now,
 	)
 	if err != nil {
@@ -1150,7 +1185,7 @@ func (store *Store) LoadPolicies() ([]KeyPolicy, error) {
 	store.mu.Lock()
 	defer store.mu.Unlock()
 	rows, err := store.db.Query(`
-SELECT key_id, name, key_sha256, group_id, five_hour_percent, seven_day_percent, max_concurrency,
+SELECT key_id, name, key_sha256, key_suffix, group_id, five_hour_percent, seven_day_percent, max_concurrency,
        five_hour_multiplier, seven_day_multiplier, allowed_models_json, access_rules_json, access_timezone, fingerprint_scheme, allocation_x, enabled
 FROM key_policies ORDER BY name, key_id`)
 	if err != nil {
@@ -1162,7 +1197,7 @@ FROM key_policies ORDER BY name, key_id`)
 		var policy KeyPolicy
 		var enabled int
 		var models, accessRules string
-		if err := rows.Scan(&policy.ID, &policy.Name, &policy.KeySHA256, &policy.GroupID, &policy.FiveHourPercent, &policy.SevenDayPercent, &policy.MaxConcurrency, &policy.FiveHourMultiplier, &policy.SevenDayMultiplier, &models, &accessRules, &policy.AccessTimezone, &policy.FingerprintScheme, &policy.AllocationX, &enabled); err != nil {
+		if err := rows.Scan(&policy.ID, &policy.Name, &policy.KeySHA256, &policy.KeySuffix, &policy.GroupID, &policy.FiveHourPercent, &policy.SevenDayPercent, &policy.MaxConcurrency, &policy.FiveHourMultiplier, &policy.SevenDayMultiplier, &models, &accessRules, &policy.AccessTimezone, &policy.FingerprintScheme, &policy.AllocationX, &enabled); err != nil {
 			return nil, fmt.Errorf("scan key policy: %w", err)
 		}
 		if err := json.Unmarshal([]byte(models), &policy.AllowedModels); err != nil {
@@ -1843,8 +1878,8 @@ ON CONFLICT(scope, scope_id, bucket_at) DO UPDATE SET
 		}
 	}
 	if len(logs) > 0 {
-		statement, err := tx.Prepare(`INSERT INTO request_logs(key_id, auth_id, model, request_content, requested_at, decision, status_code, reason, units)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+		statement, err := tx.Prepare(`INSERT INTO request_logs(key_id, key_suffix, auth_id, model, request_content, matched_term, matched_category, requested_at, decision, status_code, reason, units)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
 		if err != nil {
 			_ = tx.Rollback()
 			return fmt.Errorf("prepare request log flush: %w", err)
@@ -1854,7 +1889,7 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`)
 			if entry.KeyID == "" || entry.RequestedAt.IsZero() {
 				continue
 			}
-			if _, err := statement.Exec(entry.KeyID, entry.AuthID, entry.Model, entry.RequestContent, entry.RequestedAt.UTC().UnixMilli(), entry.Decision, entry.StatusCode, entry.Reason, entry.Units); err != nil {
+			if _, err := statement.Exec(entry.KeyID, entry.KeySuffix, entry.AuthID, entry.Model, entry.RequestContent, entry.MatchedTerm, entry.MatchedCategory, entry.RequestedAt.UTC().UnixMilli(), entry.Decision, entry.StatusCode, entry.Reason, entry.Units); err != nil {
 				_ = tx.Rollback()
 				return fmt.Errorf("flush request log: %w", err)
 			}
@@ -1924,7 +1959,7 @@ func (store *Store) ListDecisionLogsPage(keyID, decision, search string, limit, 
 	decision = strings.ToLower(strings.TrimSpace(decision))
 	search = strings.TrimSpace(search)
 	switch decision {
-	case "", "completed", "blocked", "failed", "ignored", "expired":
+	case "", "completed", "blocked", "failed", "ignored", "expired", "forbidden":
 	default:
 		return nil, 0, fmt.Errorf("invalid decision log filter")
 	}
@@ -1942,15 +1977,21 @@ func (store *Store) ListDecisionLogsPage(keyID, decision, search string, limit, 
 		clauses = append(clauses, `key_id = ?`)
 		args = append(args, keyID)
 	}
-	if decision != "" {
+	if decision == "forbidden" {
+		clauses = append(clauses, `reason = 'content_forbidden'`)
+	} else if decision != "" {
 		clauses = append(clauses, `decision = ?`)
 		args = append(args, decision)
 	}
 	if search != "" {
 		// instr preserves literal operator searches such as 503 or
-		// quota_snapshot_unavailable without LIKE wildcard semantics.
-		clauses = append(clauses, `instr(lower(model || ' ' || request_content || ' ' || reason || ' ' || auth_id || ' ' || key_id), lower(?)) > 0`)
-		args = append(args, search)
+		// quota_snapshot_unavailable without LIKE wildcard semantics. The
+		// indexed policy lookup also lets dedicated forbidden logs search the
+		// human-facing Key remark or the persisted CPA Key suffix.
+		clauses = append(clauses, `(instr(lower(model || ' ' || request_content || ' ' || matched_term || ' ' || matched_category || ' ' || reason || ' ' || auth_id || ' ' || key_id || ' ' || key_suffix), lower(?)) > 0 OR EXISTS (
+SELECT 1 FROM key_policies WHERE key_policies.key_id = request_logs.key_id AND instr(lower(key_policies.name || ' ' || key_policies.key_suffix), lower(?)) > 0
+))`)
+		args = append(args, search, search)
 	}
 	where := ""
 	if len(clauses) > 0 {
@@ -1960,7 +2001,7 @@ func (store *Store) ListDecisionLogsPage(keyID, decision, search string, limit, 
 	if err := store.db.QueryRow(`SELECT COUNT(*) FROM request_logs`+where, args...).Scan(&total); err != nil {
 		return nil, 0, fmt.Errorf("count request logs: %w", err)
 	}
-	query := `SELECT id, key_id, auth_id, model, request_content, requested_at, decision, status_code, reason, units
+	query := `SELECT id, key_id, key_suffix, auth_id, model, request_content, matched_term, matched_category, requested_at, decision, status_code, reason, units
 FROM request_logs` + where + ` ORDER BY requested_at DESC, id DESC LIMIT ? OFFSET ?`
 	pageArgs := append(append([]any(nil), args...), limit, offset)
 	return store.scanDecisionLogs(query, pageArgs, total)
@@ -1982,6 +2023,22 @@ func (store *Store) ClearDecisionLogs(keyID string) error {
 	return nil
 }
 
+func (store *Store) ClearForbiddenDecisionLogs(keyID string) error {
+	keyID = strings.TrimSpace(keyID)
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	query := `DELETE FROM request_logs WHERE reason = 'content_forbidden'`
+	args := []any(nil)
+	if keyID != "" {
+		query += ` AND key_id = ?`
+		args = append(args, keyID)
+	}
+	if _, err := store.db.Exec(query, args...); err != nil {
+		return fmt.Errorf("clear forbidden content logs: %w", err)
+	}
+	return nil
+}
+
 func (store *Store) scanDecisionLogs(query string, args []any, total int) ([]DecisionLog, int, error) {
 	rows, err := store.db.Query(query, args...)
 	if err != nil {
@@ -1992,7 +2049,7 @@ func (store *Store) scanDecisionLogs(query string, args []any, total int) ([]Dec
 	for rows.Next() {
 		var entry DecisionLog
 		var requestedAt int64
-		if err := rows.Scan(&entry.ID, &entry.KeyID, &entry.AuthID, &entry.Model, &entry.RequestContent, &requestedAt, &entry.Decision, &entry.StatusCode, &entry.Reason, &entry.Units); err != nil {
+		if err := rows.Scan(&entry.ID, &entry.KeyID, &entry.KeySuffix, &entry.AuthID, &entry.Model, &entry.RequestContent, &entry.MatchedTerm, &entry.MatchedCategory, &requestedAt, &entry.Decision, &entry.StatusCode, &entry.Reason, &entry.Units); err != nil {
 			return nil, 0, fmt.Errorf("scan request log: %w", err)
 		}
 		entry.RequestedAt = time.UnixMilli(requestedAt).UTC()

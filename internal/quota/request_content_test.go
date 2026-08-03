@@ -123,11 +123,13 @@ func TestRequestContentColumnMigratesWithoutLosingOldLogs(t *testing.T) {
 		t.Fatalf("OpenStore() migration: %v", err)
 	}
 	defer func() { _ = store.Close() }()
-	if exists, err := store.columnExists("request_logs", "request_content"); err != nil || !exists {
-		t.Fatalf("request_content column exists = %v, err=%v", exists, err)
+	for _, column := range []string{"key_suffix", "request_content", "matched_term", "matched_category"} {
+		if exists, err := store.columnExists("request_logs", column); err != nil || !exists {
+			t.Fatalf("%s column exists = %v, err=%v", column, exists, err)
+		}
 	}
 	logs, total, err := store.ListDecisionLogsPage("managed", "", "", 10, 0)
-	if err != nil || total != 1 || len(logs) != 1 || logs[0].AuthID != "account-full-id" || logs[0].RequestContent != "" {
+	if err != nil || total != 1 || len(logs) != 1 || logs[0].KeySuffix != "" || logs[0].AuthID != "account-full-id" || logs[0].RequestContent != "" || logs[0].MatchedTerm != "" || logs[0].MatchedCategory != "" {
 		t.Fatalf("migrated legacy logs = %+v, total=%d, err=%v", logs, total, err)
 	}
 }
