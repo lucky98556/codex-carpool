@@ -1,0 +1,6 @@
+# This is the complete subtree under plugins.configs.codex-carpool.
+# All codex-carpool settings are configured in the plugin menu and stored only
+# in /CLIProxyAPI/plugins/codex-carpool/data/codex-carpool.db. Do not add API
+# Keys, shared-pool allocations, model lists, or database paths to CLIProxyAPI YAML.
+enabled: true
+priority: 100

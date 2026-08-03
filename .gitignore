@@ -1,0 +1,16 @@
+# Native build outputs and local state.
+dist/
+data/
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite3
+*.so
+*.log
+.env
+.env.*
+!.env.example
+
+# Local UI QA captures may contain deployment or account identifiers.
+design-assets/
