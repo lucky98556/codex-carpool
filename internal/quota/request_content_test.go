@@ -126,7 +126,8 @@ func TestDisabledRegisteredKeyKeepsFullAccountingWithoutBudgetRejection(t *testi
 	if err != nil || len(logs) != 1 || logs[0].RequestContent != "暂停也记录" || logs[0].CostMicros != 1_400_000 {
 		t.Fatalf("disabled audit = %+v, err=%v", logs, err)
 	}
-	if spend := engine.Summary(now).Keys[0].DollarSpend; spend.FiveHour.SpentUSD != 1.4 || spend.SevenDay.SpentUSD != 1.4 || spend.FiveHour.CoolingUntil == nil || spend.SevenDay.CoolingUntil == nil {
+	if spend := engine.Summary(now).Keys[0].DollarSpend; spend.FiveHour.SpentUSD != 1.4 || spend.SevenDay.SpentUSD != 1.4 || spend.FiveHour.CoolingUntil == nil || spend.SevenDay.CoolingUntil == nil ||
+		spend.FiveHour.RefreshAt == nil || !spend.FiveHour.RefreshAt.Equal(now.Add(fiveHourWindow)) || spend.SevenDay.RefreshAt == nil || !spend.SevenDay.RefreshAt.Equal(now.Add(sevenDayWindow)) {
 		t.Fatalf("disabled Key dollar windows = %+v, want full $1.40 accounting", spend)
 	}
 	records, err := engine.UsageRecords("managed", 10)

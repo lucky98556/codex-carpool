@@ -37,7 +37,7 @@ type storedInstallationSettings struct {
 	KeyHMACSecret string `json:"key_hmac_secret"`
 }
 
-// KeyPolicy governs one downstream CPA API Key. Enabled controls only rolling
+// KeyPolicy governs one downstream CPA API Key. Enabled controls only fixed-cycle
 // dollar-budget rejection; every registered Key remains fully metered. Empty
 // model selection means all CPA-synchronized models, and a zero budget means
 // that window is unlimited.

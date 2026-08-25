@@ -10,19 +10,19 @@
 
 ## Overview
 
-`codex-carpool` owns only actual usage and USD budgets for Keys added to Usage Management. It does not maintain an account pool, read official percentage snapshots, or use multiplier/point accounting. Request excerpts, models, Tokens, cost, and both rolling windows are recorded in both **Budget enforced** and **Track only** modes; the only difference is whether an over-budget request returns `429`.
+`codex-carpool` owns only actual usage and USD budgets for Keys added to Usage Management. It does not maintain an account pool, read official percentage snapshots, or use multiplier/point accounting. Request excerpts, models, Tokens, cost, and both fixed cycles are recorded in both **Budget enforced** and **Track only** modes; the only difference is whether an over-budget request returns `429`.
 
 CPA remains responsible for credentials and routing. A Key that has not been added keeps CPA's normal behavior. External traffic is ignored and can never be attributed to an added Key.
 
 ## Features
 
-- Independent 5-hour and 7-day USD budgets per managed Key. Blank or `0` means unlimited.
+- Independent fixed 5-hour and 7-day USD cycles per added Key. The first request starts each cycle, later requests never move its boundary, and the whole cycle resets at its boundary. Blank or `0` means unlimited while metering remains active.
 - Operator-maintained per-model input, cached-input, and output prices in USD per million Tokens.
 - Synchronization is limited to models currently supported by CPA. Each Key has an optional model allowlist; an empty selection means unrestricted.
 - Missing model rates return `503`; a configured rate with all three values set to `0` is free.
-- Terminal CPA usage settlement records input, cached, output Tokens and calculated USD immediately.
+- Terminal CPA usage settlement normalizes input, cached, output, and reasoning Tokens for Codex/OpenAI, Claude/Anthropic, and Gemini before calculating USD. A requested model alias uses that alias's manually configured rate.
 - If CPA reports no actual Tokens, the request is recorded as incomplete with zero Token and USD usage; no fixed estimate is substituted.
-- A registered Key in Track-only mode still records request excerpts, models, input/cache/output Tokens, USD cost, CPA AuthID, and both rolling windows; over-budget requests continue.
+- A registered Key in Track-only mode still records request excerpts, models, input/cache/output Tokens, USD cost, CPA AuthID, and both fixed cycles; over-budget requests continue.
 - Content-regex blocking is enabled by default with built-in and custom RE2 expressions. Usage trends support hourly, daily, monthly, and yearly views.
 - CPA-host style isolation for inputs, dialogs, tables, themes, and sticky operation columns.
 

@@ -11,7 +11,7 @@
   const base='/v0/management/codex-carpool',authKey='cli-proxy-auth',legacyKey='managementKey',storageKey='codex-carpool:selected-key',securePrefix='enc::v1::',secureSalt='cli-proxy-api-webui::secure-storage';
   const state={summary:{keys:[],status:{},token_totals:{}},policies:[],models:[],rates:[],logs:[],selectedLogs:[],keyLogs:[],operationLogs:[],forbiddenLogs:[],selected:'',keyLogKeyID:'',rawKeys:[],editing:null,trend:{points:[]},trendError:'',keyTrends:{},dailyModelUsage:{models:[]},dailyModelUsageError:'',decisionPage:{page:1,page_size:10,total:0,total_pages:0},keyLogPage:{page:1,page_size:10,total:0,total_pages:0},operationPage:{page:1,page_size:10,total:0,total_pages:0},forbiddenPage:{page:1,page_size:10,total:0,total_pages:0},locale:''};
   const autoRefreshIntervalMS=5*60*1000;
-  let pageRefreshPromise=null,lastPageRefreshAt=0,autoRefreshTimer=0;
+  let pageRefreshPromise=null,lastPageRefreshAt=0,autoRefreshTimer=0,budgetBoundaryTimer=0;
   try{state.selected=String(localStorage.getItem(storageKey)||'')}catch{}
   const $=id=>document.getElementById(id);
   const value=v=>String(v??'').trim();
@@ -52,6 +52,7 @@
   function budgetPercentText(spent,budget){const ratio=budgetRatio(spent,budget);return ratio===null?uiText('不限','Unlimited'):ratio.toFixed(0)+'%'}
   function windowLabel(window,budget){const limit=Number(budget)||0;return limit>0?amountUSD(window?.spent_usd)+' / '+amountUSD(limit):amountUSD(window?.spent_usd)}
   function budgetRefreshText(window){return window?.refresh_at?formatTime(window.refresh_at):uiText('暂无','None')}
+  function scheduleBudgetBoundaryRefresh(){if(budgetBoundaryTimer){clearTimeout(budgetBoundaryTimer);budgetBoundaryTimer=0}const now=Date.now(),boundaries=[];for(const key of state.summary.keys||[])for(const window of [key.dollar_spend?.five_hour,key.dollar_spend?.seven_day]){const at=Date.parse(window?.refresh_at||'');if(Number.isFinite(at)&&at>now)boundaries.push(at)}if(!boundaries.length)return;const delay=Math.max(50,Math.min(...boundaries)-now+150);budgetBoundaryTimer=window.setTimeout(()=>{budgetBoundaryTimer=0;refreshPageData({loading:false,resetLogs:false}).catch(error=>console.warn('quota management boundary refresh failed:',errorMessage(error)))},delay)}
   // CPA returns the whole day, so today's charts must use the local date and discard future buckets.
   function localDateISO(date=new Date()){const pad=part=>String(part).padStart(2,'0');return date.getFullYear()+'-'+pad(date.getMonth()+1)+'-'+pad(date.getDate())}
   function elapsedTrendPoints(points,now=Date.now()){return (Array.isArray(points)?points:[]).filter(point=>{const timestamp=Date.parse(point.start||point.at||'');return !Number.isFinite(timestamp)||timestamp<=now})}
@@ -62,7 +63,7 @@
   function selectedLogStats(){const trend=state.trend||{},stats={inputTokens:Number(trend.input_tokens)||0,cachedTokens:Number(trend.cached_tokens)||0,outputTokens:Number(trend.output_tokens)||0,inputCost:(Number(trend.input_cost_micros)||0)/1000000,cachedCost:(Number(trend.cached_cost_micros)||0)/1000000,outputCost:(Number(trend.output_cost_micros)||0)/1000000,totalCost:(Number(trend.cost_micros)||0)/1000000,byModel:new Map};for(const item of trend.models||[]){stats.byModel.set(value(item.model)||'—',(Number(item.cost_micros)||0)/1000000)}return stats}
   function hbar(label,valueText,ratio,color){return '<div class="hmetric" style="--bar-color:'+color+'"><span title="'+escapeHTML(label)+'">'+escapeHTML(label)+'</span><div class="mini-track"><i style="width:'+Math.max(0,Math.min(100,ratio)).toFixed(1)+'%"></i></div><strong>'+valueText+'</strong></div>'}
 
-  function renderSyncStatus(){const status=state.summary.status||{};const warning=status.persistence_degraded?uiText('账本持久化异常，额度限制暂时停用','Ledger persistence is degraded; quota enforcement is temporarily unavailable'):state.modelSyncError;const syncAt=state.models.map(m=>m.synced_at).filter(Boolean).sort().pop();$('sync-state').textContent=warning||uiText('已连接用量管理','Connected to usage management');$('sync-state').parentElement.classList.toggle('warn',Boolean(warning));$('sync-time').textContent=syncAt?uiText('模型目录：','Models: ')+formatTime(syncAt):''}
+  function renderSyncStatus(){const status=state.summary.status||{};const warning=status.persistence_degraded?uiText('账本持久化异常，已添加 Key 请求暂停','Ledger persistence is degraded; requests from added Keys are paused'):state.modelSyncError;const syncAt=state.models.map(m=>m.synced_at).filter(Boolean).sort().pop();$('sync-state').textContent=warning||uiText('已连接用量管理','Connected to usage management');$('sync-state').parentElement.classList.toggle('warn',Boolean(warning));$('sync-time').textContent=syncAt?uiText('模型目录：','Models: ')+formatTime(syncAt):''}
   function renderStats(){const totals=state.summary.token_totals||{},available=Boolean(totals.available),items=[[uiText('输入 Token','Input Tokens'),available?tokens(totals.input):'—','trend'],[uiText('缓存 Token','Cached Tokens'),available?tokens(totals.cached):'—','layers'],[uiText('输出 Token','Output Tokens'),available?tokens(totals.output):'—','split'],[uiText('已添加 Key','Added Keys'),number((state.summary.keys||[]).length),'key']];$('stats').innerHTML=items.map(([name,count,icon])=>'<article class="stat-card stat-card--'+icon+'"><span class="stat-icon"><svg class="cc-icon"><use href="#cc-icon-'+icon+'"></use></svg></span><div><div class="stat-name">'+name+'</div><div class="stat-value">'+count+'</div></div></article>').join('')}
   function renderKeys(){
     const all=state.summary.keys||[],filter=value($('search')?.value).toLowerCase(),status=value($('key-status-filter')?.value),keys=all.filter(key=>(value(key.name)+' '+value(key.key_suffix)).toLowerCase().includes(filter)).filter(key=>status==='enabled'?key.enabled:status==='disabled'?!key.enabled:true);
@@ -110,7 +111,7 @@
   function render(){renderStats();renderSyncStatus();renderKeys();renderDailyModelRanking();renderDetail();renderAnalysis();renderLogs();renderKeyLogs();renderOperationalLogs();renderForbiddenLogs();window.__ccPanelBridge?.afterRender?.()}
   window.__ccRenderUsageLineChart=()=>renderAnalysis();
 
-  async function loadSummary(){const payload=await api('/summary');state.summary=payload;state.policies=payload.keys||[];render()}
+  async function loadSummary(){const payload=await api('/summary');state.summary=payload;state.policies=payload.keys||[];scheduleBudgetBoundaryRefresh();render()}
   async function loadModels(){const payload=await api('/models');state.models=(payload.models||[]).filter(model=>model.available!==false);return state.models}
   async function loadRates(){const payload=await api('/rates');state.rates=payload.rates||[];return state.rates}
   // Read downstream API Keys from CPA's canonical configuration endpoint.

@@ -210,7 +210,7 @@ func TestUnlimitedDollarWindowStillReportsSettledSpend(t *testing.T) {
 	now := time.Date(2026, time.August, 4, 12, 0, 0, 0, time.UTC)
 	state := newKeyMeterState([]meterEvent{{At: now.Add(-time.Hour), Units: 1_250_000}}, now)
 
-	snapshot := rollingWindowSnapshot(state, now, 0, fiveHourWindow, true)
+	snapshot := fixedWindowSnapshot(state, now, 0, now.Add(-time.Hour), fiveHourWindow)
 	wantRefresh := now.Add(4 * time.Hour)
 	if snapshot.Limited || snapshot.BudgetUSD != 0 || snapshot.SpentUSD != 1.25 || snapshot.CoolingUntil != nil || snapshot.RefreshAt == nil || !snapshot.RefreshAt.Equal(wantRefresh) {
 		t.Fatalf("unlimited snapshot = %+v", snapshot)
@@ -223,11 +223,11 @@ func TestDollarCoolingUsesLaterWindowRecovery(t *testing.T) {
 	now := time.Date(2026, time.August, 4, 12, 0, 0, 0, time.UTC)
 	state := newKeyMeterState([]meterEvent{{At: first, Units: 1_000_000}, {At: second, Units: 1_000_000}}, now)
 
-	five := rollingWindowSnapshot(state, now, 1_000_000, fiveHourWindow, true)
-	week := rollingWindowSnapshot(state, now, 1_000_000, sevenDayWindow, false)
+	five := fixedWindowSnapshot(state, now, 1_000_000, second, fiveHourWindow)
+	week := fixedWindowSnapshot(state, now, 1_000_000, first, sevenDayWindow)
 	later := laterCoolingUntil(five.CoolingUntil, week.CoolingUntil)
-	if later == nil || !later.Equal(second.Add(sevenDayWindow)) {
-		t.Fatalf("later cooling = %v, want %v", later, second.Add(sevenDayWindow))
+	if later == nil || !later.Equal(first.Add(sevenDayWindow)) {
+		t.Fatalf("later cooling = %v, want %v", later, first.Add(sevenDayWindow))
 	}
 }
 
@@ -260,8 +260,8 @@ func TestManagedDollarBudgetChargesOnlyManagedKeyUsage(t *testing.T) {
 	}
 }
 
-func TestManagedDollarBudgetWindowStartsAtRequestTime(t *testing.T) {
-	engine := newTestEngine(t, KeyPolicy{ID: "managed", Name: "Managed", FiveHourBudgetUSD: 0.5, SevenDayBudgetUSD: 0.5, Enabled: true})
+func TestManagedDollarBudgetCyclesStayAnchoredToFirstRequest(t *testing.T) {
+	engine := newTestEngine(t, KeyPolicy{ID: "managed", Name: "Managed", FiveHourBudgetUSD: 0.5, SevenDayBudgetUSD: 10, Enabled: true})
 	defer func() { _ = engine.Close() }()
 	if _, err := engine.ReplaceModelRates([]ModelRate{{Model: "gpt-5", OutputUSDPerMillion: 10}}); err != nil {
 		t.Fatalf("ReplaceModelRates() error = %v", err)
@@ -272,31 +272,104 @@ func TestManagedDollarBudgetWindowStartsAtRequestTime(t *testing.T) {
 	// of at this request's own timestamp.
 	requestedAt := time.Now().UTC().Truncate(time.Minute).Add(17*time.Second + 321*time.Millisecond)
 	candidates := readyNativeCandidate(t, engine, requestedAt)
-	admission := engine.Admit("managed-key", "gpt-5", requestedAt, candidates)
-	if !admission.Allowed {
-		t.Fatalf("admission = %+v, want allowed", admission)
+	first := engine.Admit("managed-key", "gpt-5", requestedAt, candidates)
+	if !first.Allowed {
+		t.Fatalf("first admission = %+v, want allowed", first)
 	}
 	engine.RecordUsage(CompletedUsage{
-		APIKey: "managed-key", AuthID: admission.AuthID, Model: "gpt-5", RequestedAt: requestedAt,
-		Generate: true, OutputTokens: 60_000, TotalTokens: 60_000,
+		APIKey: "managed-key", AuthID: first.AuthID, Model: "gpt-5", RequestedAt: requestedAt,
+		Generate: true, OutputTokens: 20_000, TotalTokens: 20_000,
 	})
+	secondAt := requestedAt.Add(time.Minute)
+	second := engine.Admit("managed-key", "gpt-5", secondAt, candidates)
+	if !second.Allowed {
+		t.Fatalf("second admission = %+v, want allowed", second)
+	}
+	engine.RecordUsage(CompletedUsage{APIKey: "managed-key", AuthID: second.AuthID, Model: "gpt-5", RequestedAt: secondAt,
+		Generate: true, OutputTokens: 40_000, TotalTokens: 40_000})
 
 	policy := engine.Policies()[0]
 	beforeFiveHourRelease := engine.dollarSpendSnapshot(policy, requestedAt.Add(fiveHourWindow-time.Millisecond)).FiveHour
-	if beforeFiveHourRelease.SpentUSD != 0.6 || beforeFiveHourRelease.CoolingUntil == nil || !beforeFiveHourRelease.CoolingUntil.Equal(requestedAt.Add(fiveHourWindow)) {
+	if beforeFiveHourRelease.SpentUSD != 0.6 || beforeFiveHourRelease.RefreshAt == nil || !beforeFiveHourRelease.RefreshAt.Equal(requestedAt.Add(fiveHourWindow)) ||
+		beforeFiveHourRelease.CoolingUntil == nil || !beforeFiveHourRelease.CoolingUntil.Equal(requestedAt.Add(fiveHourWindow)) {
 		t.Fatalf("five-hour spend immediately before request-time release = %+v", beforeFiveHourRelease)
 	}
 	afterFiveHourRelease := engine.dollarSpendSnapshot(policy, requestedAt.Add(fiveHourWindow)).FiveHour
-	if afterFiveHourRelease.SpentUSD != 0 || afterFiveHourRelease.CoolingUntil != nil {
-		t.Fatalf("five-hour spend after request-time release = %+v, want released", afterFiveHourRelease)
+	if afterFiveHourRelease.SpentUSD != 0 || afterFiveHourRelease.RefreshAt != nil || afterFiveHourRelease.CoolingUntil != nil {
+		t.Fatalf("five-hour spend at the fixed cycle boundary = %+v, want a full reset", afterFiveHourRelease)
 	}
-	beforeSevenDayRelease := engine.dollarSpendSnapshot(policy, requestedAt.Add(sevenDayWindow-time.Millisecond)).SevenDay
-	if beforeSevenDayRelease.SpentUSD != 0.6 || beforeSevenDayRelease.CoolingUntil == nil || !beforeSevenDayRelease.CoolingUntil.Equal(requestedAt.Add(sevenDayWindow)) {
-		t.Fatalf("seven-day spend immediately before request-time release = %+v", beforeSevenDayRelease)
+	thirdAt := requestedAt.Add(fiveHourWindow + time.Second)
+	third := engine.Admit("managed-key", "gpt-5", thirdAt, candidates)
+	if !third.Allowed {
+		t.Fatalf("third admission = %+v, want a new five-hour cycle", third)
 	}
+	cycles := engine.budgetCycles(policy.ID)
+	if !cycles.FiveHourStartedAt.Equal(thirdAt.Truncate(time.Millisecond)) || !cycles.SevenDayStartedAt.Equal(requestedAt.Truncate(time.Millisecond)) {
+		t.Fatalf("cycles after the next request = %+v", cycles)
+	}
+	engine.RecordUsage(CompletedUsage{APIKey: "managed-key", AuthID: third.AuthID, Model: "gpt-5", RequestedAt: thirdAt, Generate: true})
 	afterSevenDayRelease := engine.dollarSpendSnapshot(policy, requestedAt.Add(sevenDayWindow)).SevenDay
-	if afterSevenDayRelease.SpentUSD != 0 || afterSevenDayRelease.CoolingUntil != nil {
-		t.Fatalf("seven-day spend after request-time release = %+v, want released", afterSevenDayRelease)
+	if afterSevenDayRelease.SpentUSD != 0 || afterSevenDayRelease.RefreshAt != nil || afterSevenDayRelease.CoolingUntil != nil {
+		t.Fatalf("seven-day spend at the fixed cycle boundary = %+v, want a full reset", afterSevenDayRelease)
+	}
+	fourthAt := requestedAt.Add(sevenDayWindow + time.Second)
+	fourth := engine.Admit("managed-key", "gpt-5", fourthAt, candidates)
+	if !fourth.Allowed {
+		t.Fatalf("fourth admission = %+v, want new five-hour and seven-day cycles", fourth)
+	}
+	cycles = engine.budgetCycles(policy.ID)
+	if !cycles.FiveHourStartedAt.Equal(fourthAt.Truncate(time.Millisecond)) || !cycles.SevenDayStartedAt.Equal(fourthAt.Truncate(time.Millisecond)) {
+		t.Fatalf("cycles after the seven-day boundary = %+v", cycles)
+	}
+	engine.RecordUsage(CompletedUsage{APIKey: "managed-key", AuthID: fourth.AuthID, Model: "gpt-5", RequestedAt: fourthAt, Generate: true})
+}
+
+func TestProviderTokenSemanticsProduceNonOverlappingBillableBuckets(t *testing.T) {
+	rate, err := normalizeModelRate(ModelRate{Model: "test", InputUSDPerMillion: 10, CachedUSDPerMillion: 2.5, OutputUSDPerMillion: 40})
+	if err != nil {
+		t.Fatal(err)
+	}
+	tests := []struct {
+		name       string
+		record     CompletedUsage
+		wantTokens normalizedUsageTokens
+		wantCost   int64
+	}{
+		{name: "Codex cached and reasoning subsets", record: CompletedUsage{Provider: "codex", InputTokens: 1_000_000, CacheReadTokens: 250_000, OutputTokens: 100_000, ReasoningTokens: 50_000}, wantTokens: normalizedUsageTokens{Input: 750_000, Cached: 250_000, Output: 100_000}, wantCost: 12_125_000},
+		{name: "OpenAI-compatible cached and reasoning subsets", record: CompletedUsage{ExecutorType: "OpenAICompatExecutor", InputTokens: 1_000_000, CacheReadTokens: 250_000, OutputTokens: 100_000, ReasoningTokens: 50_000}, wantTokens: normalizedUsageTokens{Input: 750_000, Cached: 250_000, Output: 100_000}, wantCost: 12_125_000},
+		{name: "Claude independent cache and reasoning", record: CompletedUsage{ExecutorType: "ClaudeExecutor", InputTokens: 1_000_000, CacheReadTokens: 250_000, OutputTokens: 100_000, ReasoningTokens: 50_000}, wantTokens: normalizedUsageTokens{Input: 1_000_000, Cached: 250_000, Output: 150_000}, wantCost: 16_625_000},
+		{name: "Gemini separate reasoning", record: CompletedUsage{Provider: "gemini", InputTokens: 1_000_000, CacheReadTokens: 250_000, OutputTokens: 100_000, ReasoningTokens: 50_000}, wantTokens: normalizedUsageTokens{Input: 750_000, Cached: 250_000, Output: 150_000}, wantCost: 14_125_000},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			cost, tokens := costBreakdownForUsage(rate, test.record)
+			if tokens != test.wantTokens || cost.Total != test.wantCost {
+				t.Fatalf("tokens=%+v cost=%+v, want tokens=%+v cost=%d", tokens, cost, test.wantTokens, test.wantCost)
+			}
+		})
+	}
+}
+
+func TestUsageCallbackAliasSettlesAgainstRequestedRateName(t *testing.T) {
+	engine := newTestEngine(t, KeyPolicy{ID: "managed", Name: "Managed", Enabled: true})
+	defer func() { _ = engine.Close() }()
+	if _, err := engine.ReplaceModelRates([]ModelRate{{Model: "client-alias", OutputUSDPerMillion: 10}}); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC().Truncate(time.Millisecond)
+	captureID := engine.CaptureRequestContent("managed-key", "client-alias", "application/json", []byte(`{"prompt":"alias request"}`), now)
+	admission := engine.AdmitCaptured("managed-key", "upstream-model", captureID, now, []SchedulerCandidate{{AuthID: "account-a"}})
+	if !admission.Allowed {
+		t.Fatalf("alias admission = %+v", admission)
+	}
+	engine.RecordUsage(CompletedUsage{APIKey: "managed-key", AuthID: admission.AuthID, Model: "upstream-model", Alias: "client-alias",
+		Provider: "codex", RequestedAt: now, Generate: true, OutputTokens: 100_000, TotalTokens: 100_000})
+	if err := engine.flushPending(); err != nil {
+		t.Fatal(err)
+	}
+	logs, err := engine.DecisionLogs("managed", 10)
+	if err != nil || len(logs) != 1 || logs[0].Model != "client-alias" || logs[0].RequestContent != "alias request" || logs[0].CostMicros != 1_000_000 {
+		t.Fatalf("alias logs = %+v, err=%v", logs, err)
 	}
 }
 
@@ -369,13 +442,18 @@ func TestPendingCallbackCheckpointSurvivesPluginReload(t *testing.T) {
 	if reopened.PendingSettlementCount() != 1 {
 		t.Fatalf("reloaded pending callbacks = %d, want 1", reopened.PendingSettlementCount())
 	}
+	cycles := reopened.budgetCycles("managed")
+	wantCycleStart := requestedAt.Truncate(time.Millisecond)
+	if !cycles.FiveHourStartedAt.Equal(wantCycleStart) || !cycles.SevenDayStartedAt.Equal(wantCycleStart) {
+		t.Fatalf("reloaded budget cycles = %+v, want both anchored at %v", cycles, wantCycleStart)
+	}
 	reopened.RecordUsage(CompletedUsage{APIKey: "managed-key", AuthID: "account-a", Model: "gpt-5", RequestedAt: requestedAt,
 		Generate: true, OutputTokens: 100_000, TotalTokens: 100_000})
 	if reopened.PendingSettlementCount() != 0 {
 		t.Fatalf("settled pending callbacks = %d, want 0", reopened.PendingSettlementCount())
 	}
 	spend := reopened.dollarSpendSnapshot(reopened.Policies()[0], requestedAt.Add(time.Second)).FiveHour
-	if spend.SpentUSD != 1 {
-		t.Fatalf("reloaded request-time rate spend = %+v, want $1", spend)
+	if spend.SpentUSD != 1 || spend.RefreshAt == nil || !spend.RefreshAt.Equal(wantCycleStart.Add(fiveHourWindow)) {
+		t.Fatalf("reloaded request-time rate spend = %+v, want $1 and original fixed-cycle boundary", spend)
 	}
 }

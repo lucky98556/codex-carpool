@@ -229,6 +229,12 @@ CREATE TABLE IF NOT EXISTS key_actual_token_totals (
   output_tokens INTEGER NOT NULL DEFAULT 0,
   updated_at INTEGER NOT NULL
 );
+CREATE TABLE IF NOT EXISTS key_budget_cycles (
+  key_id TEXT PRIMARY KEY,
+  five_hour_started_at INTEGER,
+  seven_day_started_at INTEGER,
+  updated_at INTEGER NOT NULL
+);
 CREATE TABLE IF NOT EXISTS pending_request_markers (
   key_id TEXT NOT NULL,
   auth_id TEXT NOT NULL DEFAULT '',
@@ -453,7 +459,7 @@ func (store *Store) deletePolicyData(keyID string, deletePolicy bool) error {
 		return err
 	}
 	defer func() { _ = tx.Rollback() }()
-	for _, table := range []string{"usage_buckets", "usage_analysis_buckets", "key_actual_token_totals", "pending_request_markers"} {
+	for _, table := range []string{"usage_buckets", "usage_analysis_buckets", "key_actual_token_totals", "key_budget_cycles", "pending_request_markers"} {
 		column := "scope_id"
 		if table != "usage_buckets" {
 			column = "key_id"

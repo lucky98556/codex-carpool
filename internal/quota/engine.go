@@ -238,7 +238,7 @@ type pendingShard struct {
 	inFlightSince time.Time
 }
 
-// Engine owns Key policies, rolling dollar spend, terminal Token aggregation,
+// Engine owns Key policies, fixed-cycle dollar spend, terminal Token aggregation,
 // and short-lived callback markers. It stores no account entitlement state.
 type Engine struct {
 	adminMu sync.RWMutex
@@ -255,6 +255,8 @@ type Engine struct {
 
 	statesMu sync.RWMutex
 	states   engineStates
+	cyclesMu sync.RWMutex
+	cycles   map[string]budgetCycleState
 
 	store *Store
 
@@ -355,12 +357,18 @@ func Open(cfg RuntimeConfig) (*Engine, error) {
 		_ = store.Close()
 		return nil, fmt.Errorf("load pending request checkpoints: %w", err)
 	}
+	cycles, err := store.LoadBudgetCycles()
+	if err != nil {
+		_ = store.Close()
+		return nil, fmt.Errorf("load Key budget cycles: %w", err)
+	}
 	engine := &Engine{
 		config:                 cfg,
 		policiesByID:           make(map[string]KeyPolicy, len(policies)),
 		policiesByHash:         make(map[string]string, len(policies)),
 		modelRates:             make(map[string]ModelRate, len(rates)),
 		states:                 engineStates{keys: make(map[string]*keyMeterState), spend: make(map[string]*keyMeterState)},
+		cycles:                 cycles,
 		store:                  store,
 		pendingRequests:        append(make([]pendingRequest, 0, len(pendingRequests)+128), pendingRequests...),
 		capturedRequestContent: make(map[string]capturedRequestContent),
@@ -532,6 +540,12 @@ func (engine *Engine) admit(rawAPIKey, model, captureID string, now time.Time, c
 	}
 	captured := engine.claimCapturedRequestContent(captureID, keyID, now)
 	model = strings.TrimSpace(model)
+	if captured.Model != "" {
+		// The before-auth interceptor retains CPA's client-requested model before
+		// alias or model-pool rewriting. Rate, allowlist, logs, and settlement must
+		// all follow that requested name when it is available.
+		model = captured.Model
+	}
 	if captured.Match.Matched {
 		return engine.blockAdmission(keyID, "", model, captured.Content, now, "content_forbidden", "The request matched a content-blocking expression", httpStatusForbidden, captured.Match)
 	}
@@ -547,7 +561,7 @@ func (engine *Engine) admit(rawAPIKey, model, captureID string, now time.Time, c
 	}
 	if policy.Enabled && (rate.inputMicrosPerMillion > 0 || rate.cachedMicrosPerMillion > 0 || rate.outputMicrosPerMillion > 0) {
 		if coolingUntil := engine.dollarBudgetCoolingUntil(policy, now); coolingUntil != nil {
-			result := engine.blockAdmission(keyID, "", model, captured.Content, now, "key_dollar_budget_exhausted", "This API key has reached a configured rolling dollar budget", httpStatusTooManyRequests, ContentFilterMatch{})
+			result := engine.blockAdmission(keyID, "", model, captured.Content, now, "key_dollar_budget_exhausted", "This API key has reached a configured fixed-cycle dollar budget", httpStatusTooManyRequests, ContentFilterMatch{})
 			result.RetryAt = coolingUntil
 			return result
 		}
@@ -561,6 +575,11 @@ func (engine *Engine) admit(rawAPIKey, model, captureID string, now time.Time, c
 		marker := pendingRequest{KeyID: keyID, Model: model, Content: captured.Content, RequestedAt: now.UTC(), Rate: rate}
 		if !engine.addPendingRequest(marker) {
 			return engine.blockAdmission(keyID, "", model, captured.Content, now, "quota_persistence_unavailable", "too many requests are awaiting terminal usage", httpStatusServiceUnavailable, ContentFilterMatch{})
+		}
+		if err := engine.ensureBudgetCycles(keyID, now); err != nil {
+			engine.discardPendingRequest(marker)
+			engine.persistenceFailures.Add(1)
+			return engine.blockAdmission(keyID, "", model, captured.Content, now, "quota_persistence_unavailable", "failed to persist the Key budget cycle", httpStatusServiceUnavailable, ContentFilterMatch{})
 		}
 		return Admission{Bypass: true, KeyID: keyID}
 	}
@@ -581,6 +600,11 @@ func (engine *Engine) admit(rawAPIKey, model, captureID string, now time.Time, c
 	}
 	if !engine.addPendingRequest(marker) {
 		return engine.blockAdmission(keyID, marker.AuthID, model, captured.Content, now, "quota_persistence_unavailable", "too many requests are awaiting terminal usage", httpStatusServiceUnavailable, ContentFilterMatch{})
+	}
+	if err := engine.ensureBudgetCycles(keyID, now); err != nil {
+		engine.discardPendingRequest(marker)
+		engine.persistenceFailures.Add(1)
+		return engine.blockAdmission(keyID, marker.AuthID, model, captured.Content, now, "quota_persistence_unavailable", "failed to persist the Key budget cycle", httpStatusServiceUnavailable, ContentFilterMatch{})
 	}
 	return Admission{Allowed: true, KeyID: keyID, AuthID: marker.AuthID}
 }
@@ -625,17 +649,32 @@ func (engine *Engine) addPendingRequest(marker pendingRequest) bool {
 	return true
 }
 
-func (engine *Engine) takePendingRequest(keyID, authID, model string, requestedAt time.Time) (pendingRequest, bool) {
+func (engine *Engine) discardPendingRequest(marker pendingRequest) {
 	engine.pendingMu.Lock()
 	defer engine.pendingMu.Unlock()
-	model, authID = strings.TrimSpace(model), strings.TrimSpace(authID)
+	for index := len(engine.pendingRequests) - 1; index >= 0; index-- {
+		existing := engine.pendingRequests[index]
+		if existing.KeyID != marker.KeyID || existing.AuthID != marker.AuthID || existing.Model != marker.Model ||
+			!existing.RequestedAt.Equal(marker.RequestedAt) || existing.Managed != marker.Managed {
+			continue
+		}
+		engine.pendingRequests = append(engine.pendingRequests[:index], engine.pendingRequests[index+1:]...)
+		engine.pendingCount.Add(-1)
+		return
+	}
+}
+
+func (engine *Engine) takePendingRequest(keyID, authID, model, alias string, requestedAt time.Time) (pendingRequest, bool) {
+	engine.pendingMu.Lock()
+	defer engine.pendingMu.Unlock()
+	model, alias, authID = strings.TrimSpace(model), strings.TrimSpace(alias), strings.TrimSpace(authID)
 	best := -1
 	bestDistance := time.Duration(math.MaxInt64)
 	for index, marker := range engine.pendingRequests {
 		if marker.KeyID != keyID {
 			continue
 		}
-		if marker.Model != "" && model != "" && marker.Model != model {
+		if marker.Model != "" && (model != "" || alias != "") && marker.Model != model && marker.Model != alias {
 			continue
 		}
 		if marker.Managed && marker.AuthID != "" && authID != "" && marker.AuthID != authID {
@@ -706,6 +745,9 @@ type CompletedUsage struct {
 	APIKey              string
 	AuthID              string
 	Model               string
+	Alias               string
+	Provider            string
+	ExecutorType        string
 	RequestedAt         time.Time
 	Generate            bool
 	Failed              bool
@@ -750,21 +792,24 @@ func (engine *Engine) RecordUsage(record CompletedUsage) {
 	if !engine.claimUsageCallback(keyID, authID, requestedAt, record, cfg.KeyHMACSecret) {
 		return
 	}
-	marker, matched := engine.takePendingRequest(keyID, authID, model, requestedAt)
+	marker, matched := engine.takePendingRequest(keyID, authID, model, record.Alias, requestedAt)
 	if !matched {
 		engine.enqueueDecision(DecisionLog{KeyID: keyID, AuthID: authID, Model: model, RequestedAt: requestedAt, Decision: "ignored", Reason: "unmatched_usage_callback"})
 		return
 	}
 	requestedAt = marker.RequestedAt
+	if marker.Model != "" {
+		model = marker.Model
+	}
 	units := completedUsageUnits(record)
 	if !marker.Managed {
 		engine.recordUnenforcedUsage(marker, authID, units, record)
 		return
 	}
-	cachedTokens := cachedUsageTokens(record)
+	normalizedTokens := normalizedBillableUsage(record)
 	cost := costBreakdown{}
 	if units > 0 {
-		cost = costBreakdownMicros(marker.Rate, record.InputTokens, cachedTokens, record.OutputTokens)
+		cost, normalizedTokens = costBreakdownForUsage(marker.Rate, record)
 		if !engine.chargeDollarSpend(keyID, requestedAt.Truncate(time.Millisecond), cost.Total) {
 			engine.persistenceDegraded.Store(true)
 		}
@@ -794,14 +839,14 @@ func (engine *Engine) RecordUsage(record CompletedUsage) {
 	engine.enqueueDecision(DecisionLog{
 		KeyID: keyID, AuthID: authID, Model: model, RequestContent: marker.Content,
 		RequestedAt: requestedAt, Decision: decision, StatusCode: status, Reason: reason, Units: units,
-		InputTokens: record.InputTokens, CachedTokens: cachedTokens, OutputTokens: record.OutputTokens,
+		InputTokens: normalizedTokens.Input, CachedTokens: normalizedTokens.Cached, OutputTokens: normalizedTokens.Output,
 		InputCostMicros: cost.Input, CachedCostMicros: cost.Cached, OutputCostMicros: cost.Output, CostMicros: cost.Total,
 	})
 	if units > 0 {
 		event := UsageEvent{
 			Scope: "key_actual", KeyID: keyID, AuthID: authID, Model: model,
 			RequestedAt: requestedAt, RecordedAt: usageBucketEnd(requestedAt),
-			InputTokens: record.InputTokens, CachedTokens: cachedTokens, OutputTokens: record.OutputTokens,
+			InputTokens: normalizedTokens.Input, CachedTokens: normalizedTokens.Cached, OutputTokens: normalizedTokens.Output,
 			InputCostMicros: cost.Input, CachedCostMicros: cost.Cached, OutputCostMicros: cost.Output, CostMicros: cost.Total,
 			ReasoningTokens: record.ReasoningTokens, Units: units, RequestCount: 1,
 			MeteredBy: "completion_token_usage", Failed: record.Failed, FailureStatus: record.FailureStatus,
@@ -814,10 +859,14 @@ func (engine *Engine) RecordUsage(record CompletedUsage) {
 
 func (engine *Engine) recordUnenforcedUsage(marker pendingRequest, authID string, units int64, record CompletedUsage) {
 	keyID, content, requestedAt := marker.KeyID, marker.Content, marker.RequestedAt
-	cached := cachedUsageTokens(record)
+	model := marker.Model
+	if model == "" {
+		model = strings.TrimSpace(record.Model)
+	}
+	normalizedTokens := normalizedBillableUsage(record)
 	cost := costBreakdown{}
 	if units > 0 {
-		cost = costBreakdownMicros(marker.Rate, record.InputTokens, cached, record.OutputTokens)
+		cost, normalizedTokens = costBreakdownForUsage(marker.Rate, record)
 		if !engine.chargeDollarSpend(keyID, requestedAt.Truncate(time.Millisecond), cost.Total) {
 			engine.persistenceDegraded.Store(true)
 		}
@@ -840,18 +889,18 @@ func (engine *Engine) recordUnenforcedUsage(marker pendingRequest, authID string
 		status = 0
 	}
 	engine.enqueueDecision(DecisionLog{
-		KeyID: keyID, AuthID: authID, Model: strings.TrimSpace(record.Model), RequestContent: content,
+		KeyID: keyID, AuthID: authID, Model: model, RequestContent: content,
 		RequestedAt: requestedAt, Decision: decision, StatusCode: status, Reason: reason, Units: units,
-		InputTokens: record.InputTokens, CachedTokens: cached, OutputTokens: record.OutputTokens,
+		InputTokens: normalizedTokens.Input, CachedTokens: normalizedTokens.Cached, OutputTokens: normalizedTokens.Output,
 		InputCostMicros: cost.Input, CachedCostMicros: cost.Cached, OutputCostMicros: cost.Output, CostMicros: cost.Total,
 	})
 	// Budget enforcement never owns observability. Persist the same Token,
-	// rate-card cost and rolling-window accounting as an enforced Key.
+	// rate-card cost and fixed-cycle accounting as an enforced Key.
 	if units > 0 {
 		if !engine.enqueueBuckets(UsageEvent{
-			Scope: "key_actual", KeyID: keyID, AuthID: authID, Model: strings.TrimSpace(record.Model),
+			Scope: "key_actual", KeyID: keyID, AuthID: authID, Model: model,
 			RequestedAt: requestedAt, RecordedAt: usageBucketEnd(requestedAt),
-			InputTokens: record.InputTokens, CachedTokens: cached, OutputTokens: record.OutputTokens,
+			InputTokens: normalizedTokens.Input, CachedTokens: normalizedTokens.Cached, OutputTokens: normalizedTokens.Output,
 			InputCostMicros: cost.Input, CachedCostMicros: cost.Cached, OutputCostMicros: cost.Output, CostMicros: cost.Total,
 			ReasoningTokens: record.ReasoningTokens, Units: units, RequestCount: 1,
 			MeteredBy: "completion_token_usage", Failed: record.Failed, FailureStatus: record.FailureStatus,
@@ -866,7 +915,7 @@ func (engine *Engine) claimUsageCallback(keyID, authID string, requestedAt time.
 		return true
 	}
 	mac := hmac.New(sha256.New, []byte(secret))
-	_, _ = fmt.Fprintf(mac, "%s\x00%s\x00%s\x00%d\x00%t\x00%t\x00%d\x00%d\x00%d\x00%d\x00%d\x00%d\x00%d\x00%d", keyID, authID, strings.TrimSpace(record.Model), requestedAt.UTC().UnixNano(), record.Generate, record.Failed, record.FailureStatus, record.InputTokens, record.OutputTokens, record.ReasoningTokens, record.CachedTokens, record.CacheReadTokens, record.CacheCreationTokens, record.TotalTokens)
+	_, _ = fmt.Fprintf(mac, "%s\x00%s\x00%s\x00%s\x00%s\x00%s\x00%d\x00%t\x00%t\x00%d\x00%d\x00%d\x00%d\x00%d\x00%d\x00%d\x00%d", keyID, authID, strings.TrimSpace(record.Model), strings.TrimSpace(record.Alias), strings.TrimSpace(record.Provider), strings.TrimSpace(record.ExecutorType), requestedAt.UTC().UnixNano(), record.Generate, record.Failed, record.FailureStatus, record.InputTokens, record.OutputTokens, record.ReasoningTokens, record.CachedTokens, record.CacheReadTokens, record.CacheCreationTokens, record.TotalTokens)
 	id := hex.EncodeToString(mac.Sum(nil))
 	now, cutoff := time.Now().UTC(), time.Now().UTC().Add(-usageCallbackDedupeTTL)
 	engine.usageDedupeMu.Lock()

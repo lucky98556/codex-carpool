@@ -381,6 +381,9 @@ func (engine *Engine) discardKeyAccounting(keyID string) {
 	delete(engine.states.keys, keyID)
 	delete(engine.states.spend, keyID)
 	engine.statesMu.Unlock()
+	engine.cyclesMu.Lock()
+	delete(engine.cycles, keyID)
+	engine.cyclesMu.Unlock()
 	engine.discardPendingRequestsForKey(keyID)
 }
 
