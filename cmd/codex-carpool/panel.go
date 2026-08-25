@@ -32,20 +32,7 @@ var panelApp string
 
 const panelCoreBridgeMarker = `const api=(path,opt)=>call(base,path,opt),host=(path,opt)=>call('/v0/management',path,opt);`
 
-const panelCoreBridge = panelCoreBridgeMarker + `window.__ccPanelBridge?.attach?.({state,render,renderLogs,renderOperationalLogs,cpaLocale,uiText,showToast,say});`
-
-// An empty opposite-language value makes String.split("") match between every
-// character during a Chinese locale pass. Use an invisible, reversible marker
-// for the English page-suffix omission instead.
-const panelUnsafePageSuffixLocalePair = `[' 页','']`
-
-const panelSafePageSuffixLocalePair = `[' 页','\u200B']`
-
-// The generic "To" translation must not rewrite the leading characters of
-// words such as "Token" while the page is in Chinese.
-const panelUnsafeLogTranslator = `const translate=value=>{let output=String(value??'');for(const [zh,en] of pairs){const from=english()?zh:en,to=english()?en:zh;if(from!==to)output=output.split(from).join(to)}return output};`
-
-const panelSafeLogTranslator = `const translate=value=>{let output=String(value??'');for(const [zh,en] of pairs){const from=english()?zh:en,to=english()?en:zh;if(!from||from===to)continue;if(from==='To')output=output.replace(/\bTo\b/g,to);else output=output.split(from).join(to)}return output};`
+const panelCoreBridge = panelCoreBridgeMarker + `window.__ccPanelBridge?.attach?.({state,render,renderLogs,renderOperationalLogs,cpaLocale:locale,uiText,showToast,say,tokens});`
 
 func panelHTML() string {
 	page := strings.ReplaceAll(panelTemplate, "__CODEX_CARPOOL_VERSION__", html.EscapeString(pluginVersion))
@@ -56,8 +43,6 @@ func panelHTML() string {
 	// seams in the frontend artifact before it is served, rather than putting
 	// browser logic back into Go.
 	app := strings.Replace(panelApp, panelCoreBridgeMarker, panelCoreBridge, 1)
-	app = strings.Replace(app, panelUnsafePageSuffixLocalePair, panelSafePageSuffixLocalePair, 1)
-	app = strings.Replace(app, panelUnsafeLogTranslator, panelSafeLogTranslator, 1)
 	page = strings.Replace(page, "</head>", "<script>"+panelBootstrap+"</script><style>"+panelStyles+"</style></head>", 1)
 	return strings.Replace(page, "</body>", "<script>"+app+"</script></body>", 1)
 }

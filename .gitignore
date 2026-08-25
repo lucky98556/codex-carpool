@@ -8,6 +8,8 @@ data/
 *.sqlite3
 *.so
 *.log
+/*.zip
+/temp/
 .env
 .env.*
 !.env.example

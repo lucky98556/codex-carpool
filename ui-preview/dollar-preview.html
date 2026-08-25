@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>额度管理 · 本地预览</title>
+  <style>body{margin:0;font:14px/1.5 system-ui,sans-serif;color:#18314f;background:#f4f8fd}.preview-loading{padding:48px;text-align:center;color:#60748f}</style>
+</head>
+<body><p class="preview-loading">正在加载额度管理本地预览…</p>
+<script>
+(()=>{
+  try{localStorage.setItem('managementKey',JSON.stringify('preview-management-key'))}catch{}
+  const nativeFetch=window.fetch.bind(window),json=value=>Promise.resolve(new Response(JSON.stringify(value),{headers:{'Content-Type':'application/json'}}));
+  const now=new Date('2026-08-04T12:00:00Z'),later=hours=>new Date(now.getTime()+hours*3600000).toISOString();
+  const policy={id:'preview-key',name:'开发组 Key',key_suffix:'2118',enabled:true,allowed_models:['gpt-5.6-terra'],five_hour_budget_usd:20,seven_day_budget_usd:100,access_rules:[{weekdays:[1,2,3,4,5],start:'08:30',end:'20:00'}],access_timezone:'Asia/Shanghai'};
+  const summary={status:{configured:true,metering_mode:'key_dollar_rate_card_actual_token_usage'},token_totals:{available:true,input:30500400,cached:14879200,output:8726500},keys:[{...policy,dollar_spend:{five_hour:{limited:true,budget_usd:20,spent_usd:8.42,remaining_usd:11.58,refresh_at:later(4)},seven_day:{limited:true,budget_usd:100,spent_usd:42.76,remaining_usd:57.24,refresh_at:later(132)}},actual_tokens:{available:true,cycle_known:true,cycle:3281900,total:12364500,input:6541200,cached:3910700,output:1912600}}]};
+  const models=[{id:'gpt-5.6-terra',display_name:'GPT-5.6 Terra',owner:'openai',available:true,synced_at:now.toISOString()},{id:'claude-sonnet-4-6',display_name:'Claude Sonnet 4.6',owner:'anthropic',available:true,synced_at:now.toISOString()},{id:'gemini-3-pro-preview',display_name:'Gemini 3 Pro Preview',owner:'google',available:true,synced_at:now.toISOString()},{id:'grok-4-fast',display_name:'Grok 4 Fast',owner:'xai',available:true,synced_at:now.toISOString()}];
+  let rates=[{model:'gpt-5.6-terra',input_usd_per_million:2.5,cached_usd_per_million:0.25,output_usd_per_million:10,updated_at:now.toISOString()},{model:'codex-auto-review',input_usd_per_million:1.5,cached_usd_per_million:0.15,output_usd_per_million:6,updated_at:now.toISOString()}];
+  const logs=[{id:1,key_id:'preview-key',key_suffix:'2118',auth_id:'preview-plus',model:'gpt-5.6-terra',request_content:'实现 Key 的五小时和周美元额度。',requested_at:later(-0.3),decision:'completed',status_code:200,reason:'actual_token_usage',input_tokens:18420,cached_tokens:9200,output_tokens:3610,cost_micros:59150},{id:2,key_id:'preview-key',key_suffix:'2118',auth_id:'preview-pro',model:'codex-auto-review',request_content:'检查缓存输入是否重复计费。',requested_at:later(-1.2),decision:'completed',status_code:200,reason:'actual_token_usage',input_tokens:12080,cached_tokens:5800,output_tokens:1940,cost_micros:23595},{id:3,key_id:'preview-key',key_suffix:'2118',auth_id:'preview-plus',model:'gpt-5.6-sol',request_content:'未配置费率的模型示例。',requested_at:later(-2),decision:'blocked',status_code:503,reason:'model_rate_not_configured',input_tokens:0,cached_tokens:0,output_tokens:0,cost_micros:0}];
+  const keyDialogLogs=Array.from({length:13},(_,index)=>({...logs[index%logs.length],id:100+index,requested_at:later(-index/3),request_content:'Key 独立分页日志 '+(index+1)+'：'+logs[index%logs.length].request_content}));
+  const operationLogs=[{id:1,occurred_at:later(-0.1),level:'info',event:'actual_usage_settled',auth_id:'preview-plus',message:'CPA 终态 Token 已结算：输入 18420，缓存 9200，输出 3610，消耗 $0.0592'},{id:2,occurred_at:later(-4.9),level:'info',event:'model_rates_saved',message:'模型美元费率已更新：2 个模型'}];
+  const mockFetch=(input,options={})=>{
+    const url=new URL(typeof input==='string'?input:input.url,location.origin),path=url.pathname,method=(options.method||'GET').toUpperCase(),body=()=>{try{return JSON.parse(options.body||'{}')}catch{return {}}};
+    if(path.includes('/model-definitions/'))return json({models});
+    if(!path.startsWith('/v0/management'))return nativeFetch(input,options);
+    if(path.endsWith('/summary'))return json(summary);
+    if(path.endsWith('/keys')){if(method==='GET')return json({keys:[policy]});if(method==='POST'||method==='PUT'){Object.assign(policy,body().policy||{});Object.assign(summary.keys[0],policy);return json({key:policy})}return json({status:'ok'})}
+    if(path.endsWith('/keys/reset'))return json({status:'ok'});
+    if(path.endsWith('/models'))return json(method==='GET'?{models}:{status:'ok'});
+    if(path.endsWith('/rates')){if(method==='GET')return json({rates});rates=(body().rates||[]).map(rate=>({...rate,updated_at:new Date().toISOString()}));return json({rates})}
+    if(path.endsWith('/logs')){const page=Math.max(1,Number(url.searchParams.get('page'))||1),pageSize=Math.max(1,Number(url.searchParams.get('page_size'))||10),source=url.searchParams.has('key_id')&&pageSize===10?keyDialogLogs:logs,totalPages=Math.max(1,Math.ceil(source.length/pageSize)),items=source.slice((page-1)*pageSize,page*pageSize);return json({logs:items,page,page_size:pageSize,total:source.length,total_pages:totalPages})}
+    if(path.endsWith('/operation-logs'))return json({logs:operationLogs,page:1,page_size:10,total:operationLogs.length,total_pages:1});
+    if(path.endsWith('/model-ranking'))return json({from:later(-12),to:later(12),timezone:'Asia/Shanghai',total_tokens:8946000,request_count:27,cost_micros:18423500,models:[{model:'gpt-5.6-terra',total_tokens:4210000,request_count:12,input_tokens:2850000,cached_tokens:910000,output_tokens:450000,cost_micros:8920000},{model:'gpt-5.5',total_tokens:2736000,request_count:8,input_tokens:1760000,cached_tokens:676000,output_tokens:300000,cost_micros:5215000},{model:'claude-sonnet-4-6',total_tokens:1280000,request_count:4,input_tokens:810000,cached_tokens:300000,output_tokens:170000,cost_micros:3108500},{model:'gemini-3-pro-preview',total_tokens:720000,request_count:3,input_tokens:510000,cached_tokens:120000,output_tokens:90000,cost_micros:1180000}]});
+    if(path.endsWith('/analysis'))return json({from:later(-3),to:later(1),timezone:'Asia/Shanghai',granularity:'hour',retention_days:366,total_tokens:51050,request_count:2,input_tokens:30500,cached_tokens:15000,output_tokens:5550,input_cost_micros:64170,cached_cost_micros:3170,output_cost_micros:47700,cost_micros:115040,models:[{model:'gpt-5.6-terra',input_tokens:18420,cached_tokens:9200,output_tokens:3610,total_tokens:31230,request_count:1,input_cost_micros:46050,cached_cost_micros:2300,output_cost_micros:36100,cost_micros:84450},{model:'codex-auto-review',input_tokens:12080,cached_tokens:5800,output_tokens:1940,total_tokens:19820,request_count:1,input_cost_micros:18120,cached_cost_micros:870,output_cost_micros:11600,cost_micros:30590}],points:[{start:later(-3),label:'09:00',units:4800,request_count:1,input_tokens:2800,cached_tokens:1200,output_tokens:800,cost_micros:10800},{start:later(-2),label:'10:00',units:15970,request_count:0,input_tokens:9500,cached_tokens:4800,output_tokens:1670,cost_micros:35940},{start:later(-1),label:'11:00',units:30280,request_count:1,input_tokens:18200,cached_tokens:9000,output_tokens:3080,cost_micros:68300}]});
+    if(path.endsWith('/content-filter'))return json({settings:{enabled:true,terms:[{value:'preview-blocked-word',category:'安全',source:'custom',enabled:true}]}});
+    if(path.endsWith('/forbidden-logs'))return json({logs:[],page:1,page_size:10,total:0,total_pages:0});
+    if(path.endsWith('/setup'))return json({settings:{auth_directory:'~/.cli-proxy-api'}});
+    if(path.endsWith('/api-keys'))return json({'api-keys':['preview-cpa-key-2118']});
+    return json({status:'ok'});
+  };
+  window.fetch=mockFetch;
+  Promise.all(['../cmd/codex-carpool/web/index.html','../cmd/codex-carpool/web/bootstrap.js','../cmd/codex-carpool/web/styles.css','../cmd/codex-carpool/web/app.js'].map(path=>nativeFetch(path,{cache:'no-store'}).then(response=>response.text()))).then(([page,bootstrap,styles,app])=>{
+    // Inject scripts as DOM nodes after replacing the page. Putting the panel
+    // source into document.write made preview parsing sensitive to inline code.
+    const previewParams=new URLSearchParams(location.search),previewLocale=previewParams.get('locale'),previewTheme=previewParams.get('theme');
+    page=page.replaceAll('__CODEX_CARPOOL_VERSION__','preview').replace('<html lang="zh-CN">','<html lang="'+(previewLocale==='en'?'en-US':'zh-CN')+'"'+(previewTheme==='dark'?' data-theme="dark"':'')+'>').replace('</head>','<style>'+styles+'</style></head>');
+    document.open();document.write(page);document.close();
+    const bootstrapScript=document.createElement('script');bootstrapScript.text=bootstrap;document.head.append(bootstrapScript);
+    const appScript=document.createElement('script');appScript.text=app;document.body.append(appScript);
+  }).catch(error=>{document.body.innerHTML='<pre>预览加载失败：'+String(error.message||error)+'</pre>'});
+})();
+</script></body>
+</html>

@@ -1,21 +1,23 @@
 package quota
 
 import (
+	"bytes"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"io"
+	"mime"
+	"mime/multipart"
 	"strings"
 	"time"
 )
 
 const (
-	maxCapturedRequestBodyBytes = 4 << 20
-	maxRequestContentRunes      = 2_000
-	maxContentFilterScanRunes   = 64_000
-	capturedRequestContentTTL   = 2 * time.Minute
-	pendingRequestContentTTL    = 2 * time.Hour
-	maxCapturedRequestContent   = 4_096
-	maxPendingRequestContent    = 4_096
+	maxJSONRequestContentBytes = 4 << 20
+	maxRequestContentRunes     = 2_000
+	maxContentFilterScanRunes  = 64_000
+	capturedRequestContentTTL  = 2 * time.Minute
+	maxCapturedRequestContent  = 4_096
 )
 
 type capturedRequestContent struct {
@@ -24,12 +26,6 @@ type capturedRequestContent struct {
 	Content    string
 	Match      ContentFilterMatch
 	CapturedAt time.Time
-}
-
-type pendingRequestContent struct {
-	Model       string
-	Content     string
-	RequestedAt time.Time
 }
 
 type requestContentEnvelope struct {
@@ -46,10 +42,10 @@ type requestContentMessage struct {
 }
 
 // CaptureRequestContent is called by the CPA before-auth interceptor. Parsing
-// is restricted to enabled managed Keys, keeping unmanaged traffic off this
-// plugin's request-content path.
-func (engine *Engine) CaptureRequestContent(rawAPIKey, model string, body []byte, now time.Time) string {
-	if engine == nil || len(body) == 0 || len(body) > maxCapturedRequestBodyBytes || engine.admissionsClosed.Load() {
+// is restricted to registered Keys. A disabled policy bypasses enforcement,
+// but its terminal request audit still retains the same bounded user excerpt.
+func (engine *Engine) CaptureRequestContent(rawAPIKey, model, contentType string, body []byte, now time.Time) string {
+	if engine == nil || len(body) == 0 || engine.admissionsClosed.Load() {
 		return ""
 	}
 	engine.adminMu.RLock()
@@ -59,13 +55,12 @@ func (engine *Engine) CaptureRequestContent(rawAPIKey, model string, body []byte
 	fingerprint := FingerprintAPIKey(rawAPIKey, secret)
 	engine.policiesMu.RLock()
 	keyID, found := engine.policiesByHash[fingerprint]
-	policy := engine.policiesByID[keyID]
 	engine.policiesMu.RUnlock()
 	engine.adminMu.RUnlock()
-	if fingerprint == "" || !found || !policy.Enabled {
+	if fingerprint == "" || !found {
 		return ""
 	}
-	scanContent := extractUserRequestContentWithLimit(body, maxContentFilterScanRunes)
+	scanContent := extractUserRequestContentWithTypeAndLimit(body, contentType, maxContentFilterScanRunes)
 	if scanContent == "" {
 		return ""
 	}
@@ -112,63 +107,7 @@ func (engine *Engine) claimCapturedRequestContent(captureID, keyID string, now t
 	return captured
 }
 
-func (engine *Engine) rememberPendingRequestContent(key allocationBucketKey, model, content string, requestedAt time.Time) {
-	content = normalizeRequestContent(content)
-	if engine == nil || key.KeyID == "" || key.AuthID == "" || content == "" {
-		return
-	}
-	engine.requestContentMu.Lock()
-	defer engine.requestContentMu.Unlock()
-	engine.pruneRequestContentLocked(requestedAt.UTC())
-	if engine.pendingRequestCount >= maxPendingRequestContent {
-		return
-	}
-	engine.pendingRequestContent[key] = append(engine.pendingRequestContent[key], pendingRequestContent{
-		Model: strings.TrimSpace(model), Content: content, RequestedAt: requestedAt.UTC(),
-	})
-	engine.pendingRequestCount++
-}
-
-func (engine *Engine) takePendingRequestContent(key allocationBucketKey, model string, requestedAt time.Time) string {
-	if engine == nil || key.KeyID == "" || key.AuthID == "" {
-		return ""
-	}
-	engine.requestContentMu.Lock()
-	defer engine.requestContentMu.Unlock()
-	items := engine.pendingRequestContent[key]
-	if len(items) == 0 {
-		return ""
-	}
-	model = strings.TrimSpace(model)
-	best := -1
-	bestDistance := time.Duration(1<<63 - 1)
-	for index, item := range items {
-		if model != "" && item.Model != "" && item.Model != model {
-			continue
-		}
-		distance := requestedAt.UTC().Sub(item.RequestedAt)
-		if distance < 0 {
-			distance = -distance
-		}
-		if best < 0 || distance < bestDistance {
-			best, bestDistance = index, distance
-		}
-	}
-	if best < 0 {
-		best = 0
-	}
-	content := items[best].Content
-	items = append(items[:best], items[best+1:]...)
-	engine.pendingRequestCount--
-	if len(items) == 0 {
-		delete(engine.pendingRequestContent, key)
-	} else {
-		engine.pendingRequestContent[key] = items
-	}
-	return content
-}
-
-func (engine *Engine) discardPendingRequestContentForKey(keyID string) {
+func (engine *Engine) discardCapturedRequestContentForKey(keyID string) {
 	if engine == nil || keyID == "" {
 		return
 	}
@@ -178,15 +117,6 @@ func (engine *Engine) discardPendingRequestContentForKey(keyID string) {
 		if item.KeyID == keyID {
 			delete(engine.capturedRequestContent, captureID)
 		}
-	}
-	for key, items := range engine.pendingRequestContent {
-		if key.KeyID == keyID {
-			engine.pendingRequestCount -= len(items)
-			delete(engine.pendingRequestContent, key)
-		}
-	}
-	if engine.pendingRequestCount < 0 {
-		engine.pendingRequestCount = 0
 	}
 }
 
@@ -200,32 +130,36 @@ func (engine *Engine) pruneRequestContentLocked(now time.Time) {
 			delete(engine.capturedRequestContent, captureID)
 		}
 	}
-	pendingCutoff := now.Add(-pendingRequestContentTTL)
-	for key, items := range engine.pendingRequestContent {
-		kept := items[:0]
-		for _, item := range items {
-			if !item.RequestedAt.Before(pendingCutoff) {
-				kept = append(kept, item)
-			} else {
-				engine.pendingRequestCount--
-			}
-		}
-		if len(kept) == 0 {
-			delete(engine.pendingRequestContent, key)
-		} else {
-			engine.pendingRequestContent[key] = kept
-		}
-	}
-	if engine.pendingRequestCount < 0 {
-		engine.pendingRequestCount = 0
-	}
 }
 
 func extractUserRequestContent(body []byte) string {
-	return extractUserRequestContentWithLimit(body, maxRequestContentRunes)
+	return extractUserRequestContentWithTypeAndLimit(body, "application/json", maxRequestContentRunes)
 }
 
 func extractUserRequestContentWithLimit(body []byte, limit int) string {
+	return extractUserRequestContentWithTypeAndLimit(body, "application/json", limit)
+}
+
+func extractUserRequestContentWithType(body []byte, contentType string) string {
+	return extractUserRequestContentWithTypeAndLimit(body, contentType, maxRequestContentRunes)
+}
+
+func extractUserRequestContentWithTypeAndLimit(body []byte, contentType string, limit int) string {
+	mediaType, params, err := mime.ParseMediaType(strings.TrimSpace(contentType))
+	if err == nil && strings.EqualFold(mediaType, "multipart/form-data") {
+		return requestMultipartPromptWithLimit(body, params["boundary"], limit)
+	}
+	if len(body) > maxJSONRequestContentBytes {
+		// Large JSON image edits commonly carry a top-level base64 image. Decode
+		// only prompt so the image field is validated but never retained.
+		var promptOnly struct {
+			Prompt json.RawMessage `json:"prompt"`
+		}
+		if err := json.Unmarshal(body, &promptOnly); err != nil {
+			return ""
+		}
+		return requestScalarTextWithLimit(promptOnly.Prompt, limit)
+	}
 	var envelope requestContentEnvelope
 	if err := json.Unmarshal(body, &envelope); err != nil {
 		return ""
@@ -241,6 +175,36 @@ func extractUserRequestContentWithLimit(body []byte, limit int) string {
 		return content
 	}
 	return requestScalarTextWithLimit(envelope.Prompt, limit)
+}
+
+// Image-edit requests can contain large binary file parts. Read only the
+// prompt field from the existing body and never copy uploaded image content
+// into the captured request excerpt.
+func requestMultipartPromptWithLimit(body []byte, boundary string, limit int) string {
+	boundary = strings.TrimSpace(boundary)
+	if boundary == "" {
+		return ""
+	}
+	reader := multipart.NewReader(bytes.NewReader(body), boundary)
+	for {
+		part, err := reader.NextPart()
+		if err == io.EOF {
+			return ""
+		}
+		if err != nil {
+			return ""
+		}
+		if part.FormName() != "prompt" || part.FileName() != "" {
+			_ = part.Close()
+			continue
+		}
+		value, err := io.ReadAll(io.LimitReader(part, maxJSONRequestContentBytes+1))
+		_ = part.Close()
+		if err != nil || len(value) > maxJSONRequestContentBytes {
+			return ""
+		}
+		return normalizeRequestContentWithLimit(string(value), limit)
+	}
 }
 
 func requestInputText(raw json.RawMessage) string {

@@ -9,8 +9,6 @@ import (
 	"testing"
 	"time"
 
-	"codex-carpool/internal/quota"
-
 	"github.com/router-for-me/CLIProxyAPI/v7/sdk/pluginabi"
 	"github.com/router-for-me/CLIProxyAPI/v7/sdk/pluginapi"
 )
@@ -37,10 +35,10 @@ func TestManagementErrorsUseStableCodeAndCPAEnglishOrChinese(t *testing.T) {
 		english string
 	}{
 		{
-			cause:   "Key allocation 5.00x exceeds the remaining shared pool 1.00x",
-			code:    "shared_pool_capacity_exceeded",
-			chinese: "共享账号池剩余可分配 x 不足，无法保存此分配。",
-			english: "The shared account pool does not have enough remaining x allocation for this change.",
+			cause:   "the API key fingerprint is already managed by managed-2",
+			code:    "api_key_already_managed",
+			chinese: "该 CPA Key 已添加，请直接编辑现有设置。",
+			english: "This CPA Key has already been added. Edit its existing settings instead.",
 		},
 		{
 			cause:   "access_rules[0].weekdays is required",
@@ -53,6 +51,18 @@ func TestManagementErrorsUseStableCodeAndCPAEnglishOrChinese(t *testing.T) {
 			code:    "analysis_hour_range_invalid",
 			chinese: "按小时统计最多支持 31 个自然日，请缩短日期区间。",
 			english: "Hourly analysis supports at most 31 calendar days. Shorten the date range.",
+		},
+		{
+			cause:   `invalid RE2 expression "(": error parsing regexp`,
+			code:    "content_filter_expression_invalid",
+			chinese: "正则表达式无效，请检查 RE2 语法、长度和重复项。",
+			english: "The regular expression is invalid. Check its RE2 syntax, length, and duplicates.",
+		},
+		{
+			cause:   `content-filter expression ".*" must not match empty text`,
+			code:    "content_filter_expression_empty",
+			chinese: "正则表达式不能匹配空内容，请缩小匹配范围。",
+			english: "The regular expression must not match empty content. Narrow its match scope.",
 		},
 		{
 			cause:   "unexpected sqlite detail",
@@ -75,8 +85,8 @@ func TestManagementErrorsUseStableCodeAndCPAEnglishOrChinese(t *testing.T) {
 }
 
 func TestAdmissionErrorsAreLocalizedWithoutChangingTheirStableCode(t *testing.T) {
-	if got := localizedAdmissionMessage("zh", "quota_snapshot_unavailable", "ignored"); got != "暂无可用的官方额度快照，请稍后重试。" {
-		t.Fatalf("Chinese snapshot message = %q", got)
+	if got := localizedAdmissionMessage("zh", "key_dollar_budget_exhausted", "ignored"); got != "此 Key 已达到设置的额度。" {
+		t.Fatalf("Chinese dollar-budget message = %q", got)
 	}
 	if got := localizedAdmissionMessage("en", "model_not_allowed", "ignored"); got != "This API Key is not allowed to use the requested model." {
 		t.Fatalf("English model message = %q", got)
@@ -84,8 +94,8 @@ func TestAdmissionErrorsAreLocalizedWithoutChangingTheirStableCode(t *testing.T)
 	if got := localizedAdmissionMessage("zh", "unknown_code", "original English detail"); got != "请求暂时无法处理，请稍后重试。" {
 		t.Fatalf("Chinese unknown fallback = %q", got)
 	}
-	if got := localizedAdmissionMessage("en", "quota_allocation_exhausted", "ignored"); got != "This API Key has exhausted its shared-pool allocation for the current official window." {
-		t.Fatalf("English allocation message = %q", got)
+	if got := localizedAdmissionMessage("en", "key_dollar_budget_exhausted", "ignored"); got != "This API key has reached its configured quota." {
+		t.Fatalf("English dollar-budget message = %q", got)
 	}
 }
 
@@ -115,28 +125,8 @@ func TestManagementFailureDoesNotExposeRawInternalDetail(t *testing.T) {
 	}
 }
 
-func TestLocalizedQuotaResponsesDoNotMutateOrExposeUpstreamErrors(t *testing.T) {
-	readiness := quotaSnapshotReadiness{Errors: map[string]string{"account-a": "official quota returned HTTP 401 at /private/auth.json"}}
-	localizedReadiness := localizedQuotaReadiness("en", readiness)
-	if got := localizedReadiness.Errors["account-a"]; got != "Official quota synchronization failed. See plugin runtime and error logs." {
-		t.Fatalf("localized readiness = %q", got)
-	}
-	if got := readiness.Errors["account-a"]; got == localizedReadiness.Errors["account-a"] {
-		t.Fatal("localizing readiness must not overwrite the synchronizer diagnostic")
-	}
-
-	accounts := []quota.AccountPoolSnapshot{{Quota: &quota.OfficialQuotaSnapshot{AuthID: "account-a", LastError: "official quota returned HTTP 401 at /private/auth.json"}}}
-	localizedAccounts := localizedAccountPoolSnapshots("zh", accounts)
-	if got := localizedAccounts[0].Quota.LastError; got != "官方额度同步失败，请查看插件运行与错误日志。" {
-		t.Fatalf("localized account error = %q", got)
-	}
-	if got := accounts[0].Quota.LastError; got != "official quota returned HTTP 401 at /private/auth.json" {
-		t.Fatalf("source account error was mutated: %q", got)
-	}
-}
-
 func TestManagementFailureLoggingKeepsOnlySafeOperationalFailures(t *testing.T) {
-	if !managementFailureShouldLog("operation_failed") || !managementFailureShouldLog("account_discovery_failed") {
+	if !managementFailureShouldLog("operation_failed") || !managementFailureShouldLog("usage_analysis_unavailable") {
 		t.Fatal("operational management failures should be retained in the plugin log")
 	}
 	if managementFailureShouldLog("invalid_json") {
@@ -147,7 +137,7 @@ func TestManagementFailureLoggingKeepsOnlySafeOperationalFailures(t *testing.T) 
 	}
 }
 
-func TestManagementRegistrationUsesRequestedChineseMenuName(t *testing.T) {
+func TestManagementRegistrationUsesUsageManagementMenuName(t *testing.T) {
 	raw, err := handleMethod(pluginabi.MethodManagementRegister, nil)
 	if err != nil {
 		t.Fatalf("register management routes: %v", err)
@@ -160,11 +150,14 @@ func TestManagementRegistrationUsesRequestedChineseMenuName(t *testing.T) {
 	if err := json.Unmarshal(wrapped.Result, &registration); err != nil {
 		t.Fatalf("decode registration: %v", err)
 	}
-	if len(registration.Resources) != 1 || registration.Resources[0].Menu != "Codex 拼车" {
-		t.Fatalf("registered menu = %#v, want Codex 拼车", registration.Resources)
+	if len(registration.Resources) != 1 || registration.Resources[0].Menu != pluginDisplayName {
+		t.Fatalf("registered menu = %#v, want %s", registration.Resources, pluginDisplayName)
 	}
 	expectedRoutes := map[string]bool{
 		http.MethodPost + " /codex-carpool/keys/reset":       false,
+		http.MethodGet + " /codex-carpool/model-ranking":     false,
+		http.MethodGet + " /codex-carpool/logs":              false,
+		http.MethodDelete + " /codex-carpool/logs":           false,
 		http.MethodGet + " /codex-carpool/content-filter":    false,
 		http.MethodPut + " /codex-carpool/content-filter":    false,
 		http.MethodGet + " /codex-carpool/forbidden-logs":    false,
@@ -185,6 +178,9 @@ func TestManagementRegistrationUsesRequestedChineseMenuName(t *testing.T) {
 
 func TestPluginRegistrationAndRequestInterceptorCleanup(t *testing.T) {
 	registration := pluginRegistration()
+	if registration.Metadata.Name != pluginDisplayName {
+		t.Fatalf("plugin display name = %q, want %q", registration.Metadata.Name, pluginDisplayName)
+	}
 	if registration.Metadata.GitHubRepository != pluginGitHubRepository {
 		t.Fatalf("plugin repository = %q, want %q", registration.Metadata.GitHubRepository, pluginGitHubRepository)
 	}

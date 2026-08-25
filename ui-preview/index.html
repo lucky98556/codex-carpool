@@ -3,97 +3,10 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta http-equiv="refresh" content="0; url=./dollar-preview.html">
   <title>codex-carpool · UI Preview</title>
-  <!-- Preview and packaged plugin intentionally share one production stylesheet. -->
-  <link rel="stylesheet" href="../cmd/codex-carpool/web/styles.css">
-  <script src="https://code.iconify.design/iconify-icon/2.1.0/iconify-icon.min.js"></script>
 </head>
 <body>
-  <div class="shell">
-    <aside class="sidebar" aria-label="CPAMP 导航预览">
-      <div class="brand"><span class="brand-mark">C</span><strong>CPAMP</strong></div>
-      <nav>
-        <a href="#"><iconify-icon icon="solar:widget-4-linear"></iconify-icon>仪表盘</a>
-        <a href="#"><iconify-icon icon="solar:chart-2-linear"></iconify-icon>用量分析</a>
-        <a href="#"><iconify-icon icon="solar:sort-by-time-linear"></iconify-icon>请求监控</a>
-        <span class="nav-divider"></span>
-        <a href="#"><iconify-icon icon="solar:tuning-2-linear"></iconify-icon>配置面板</a>
-        <a href="#"><iconify-icon icon="solar:share-circle-linear"></iconify-icon>AI 提供商</a>
-        <a href="#"><iconify-icon icon="solar:plug-circle-linear"></iconify-icon>插件管理</a>
-        <span class="nav-divider"></span>
-        <a href="#"><iconify-icon icon="solar:shield-keyhole-linear"></iconify-icon>认证文件</a>
-        <a href="#"><iconify-icon icon="solar:login-3-linear"></iconify-icon>OAuth 登录</a>
-        <a href="#"><iconify-icon icon="solar:pie-chart-2-linear"></iconify-icon>配额管理</a>
-        <a href="#"><iconify-icon icon="solar:notes-linear"></iconify-icon>日志查看</a>
-      </nav>
-      <a class="plugin-link" href="#"><iconify-icon icon="solar:plug-circle-bold"></iconify-icon>codex-carpool</a>
-    </aside>
-
-    <main class="app cc-panel">
-      <header class="topbar">
-        <div class="topbar-title"><iconify-icon icon="solar:sidebar-minimalistic-linear"></iconify-icon><span>codex-carpool</span></div>
-        <div class="topbar-actions"><iconify-icon icon="solar:refresh-linear"></iconify-icon><iconify-icon icon="solar:settings-linear"></iconify-icon><iconify-icon icon="solar:logout-2-linear"></iconify-icon></div>
-      </header>
-
-      <div class="page">
-        <section class="utility-row">
-          <div class="connection"><i></i><span>已连接 codex-carpool</span><em>最近模型同步：7/28 09:11</em><b>插件管理&nbsp; / &nbsp;codex-carpool</b></div>
-          <div class="utility-actions">
-            <button class="secondary">认证目录</button><button class="primary">同步 CPA Key 与模型</button><button class="secondary">额度诊断</button>
-          </div>
-        </section>
-
-        <section class="heading">
-          <div><h1>codex-carpool <span>v0.4.9</span></h1><p>Codex 拼车插件 · 未配置策略的 CPA Key 不限制 · 官方账号窗口驱动的共享总池</p></div>
-        </section>
-
-        <section class="stats" aria-label="额度概览">
-          <article class="card"><span class="stat-icon violet"><iconify-icon icon="solar:shield-check-linear"></iconify-icon></span><div><small class="stat-name">受控 Key</small><strong class="stat-value">3</strong></div></article>
-          <article class="card"><span class="stat-icon indigo"><iconify-icon icon="solar:users-group-rounded-linear"></iconify-icon></span><div><small class="stat-name">账号池</small><strong class="stat-value">2 个</strong></div></article>
-          <article class="card"><span class="stat-icon plum"><iconify-icon icon="solar:chart-square-linear"></iconify-icon></span><div><small class="stat-name">已分配</small><strong class="stat-value">11x</strong></div></article>
-          <article class="card"><span class="stat-icon purple"><iconify-icon icon="solar:graph-up-linear"></iconify-icon></span><div><small class="stat-name">可分配</small><strong class="stat-value">10x</strong></div></article>
-        </section>
-
-        <section class="dashboard-grid">
-          <article class="key-panel card">
-            <div class="section-head">
-              <h2>Key 分配与使用</h2>
-              <div class="key-tools"><label class="search"><iconify-icon icon="solar:magnifer-linear"></iconify-icon><input id="key-search" placeholder="搜索备注或 Key 指纹"></label><button class="filter" aria-label="筛选"><iconify-icon icon="solar:filter-linear"></iconify-icon></button><button class="primary"><iconify-icon icon="solar:add-circle-linear"></iconify-icon>Key 管理</button></div>
-            </div>
-            <div class="table-wrap"><table class="key-table"><thead><tr><th>Key 备注</th><th>分配额度</th><th>官方确认</th><th>周期 Token</th><th>累计 Token</th><th>模型策略</th><th>状态</th><th>操作</th></tr></thead><tbody id="key-rows"></tbody></table></div>
-
-            <section class="key-analysis" aria-live="polite">
-              <div class="analysis-title"><h3 id="analysis-name">单 Key 用量分析 · 小周</h3><span>实时 Token 结算</span></div>
-              <div class="analysis-body">
-                <div class="usage-summary"><div class="usage-ring"><div><strong id="usage-percent">46%</strong><small>已用</small></div></div><div class="usage-numbers"><p><small>已用 Token</small><strong id="used-token">27.61M</strong></p><p><small>已预留 Token</small><strong id="reserved-token">8.74M</strong></p><p class="remaining"><small>剩余 Token</small><strong id="remaining-token">23.65M / 60M</strong></p></div></div>
-                <div class="quality-metrics"><div><small>请求次数</small><strong id="request-count">12,842</strong></div><div><small>成功率</small><strong class="success" id="success-rate">98.7%</strong></div><div><small>平均延迟</small><strong id="latency">1.21s</strong></div><div class="weekly-bars"><small>近 7 日 Token 用量</small><div class="bars line-chart"><canvas id="preview-line-chart" class="usage-line-canvas" aria-label="近 7 日 Token 用量折线图"></canvas><div id="preview-chart-tooltip" class="line-chart-tooltip" hidden></div></div></div></div>
-                <div class="model-mix"><small>模型分布（按 Token）</small><div><span>gpt-5.3-codex-spark</span><b>56%</b></div><div><span>gpt-5.4</span><b>24%</b></div><div><span>gpt-5.4-mini</span><b>11%</b></div><div><span>gpt-5.6-luna</span><b>6%</b></div><div><span>其他</span><b>3%</b></div></div>
-              </div>
-            </section>
-          </article>
-
-        <aside id="official-account-pool" class="pool-card">
-            <div class="pool-head"><div class="pool-title"><span class="pool-title-icon"><iconify-icon icon="solar:shield-check-linear"></iconify-icon></span><div><h2>官方账号池</h2><p>官方周额度 · 账号池实时健康度</p></div></div><div><span class="pool-sync"><i></i>官方同步</span><button class="pool-button">刷新额度</button><button class="pool-button">配置账号池</button></div></div>
-            <div class="pool-overview">
-              <div class="pool-metric"><span class="pool-metric-icon"><iconify-icon icon="solar:graph-up-linear"></iconify-icon></span><div><span class="muted">合计可用额度</span><strong>21x</strong></div></div>
-              <div class="pool-metric"><span class="pool-metric-icon"><iconify-icon icon="solar:bolt-linear"></iconify-icon></span><div><span class="muted">可用额度</span><strong>14.38x</strong></div></div>
-              <div class="pool-metric pool-health"><span class="pool-metric-icon"><iconify-icon icon="solar:shield-check-linear"></iconify-icon></span><div><span class="muted">池健康度</span><strong>2 / 2</strong></div><i><span style="width:100%"></span></i></div>
-            </div>
-            <div class="pool-account-list">
-              <div class="pool-account"><div class="pool-account-head"><div class="pool-account-identity"><span class="pool-account-icon"><iconify-icon icon="solar:bolt-linear"></iconify-icon></span><strong class="pool-account-name">relay@appleid.com · 1x</strong></div><span class="pool-account-status">可用</span></div><div class="pool-account-meta"><span>周剩余 79%</span><span>1x 容量</span></div><div class="pool-meter"><span style="width:79%"></span></div><div class="pool-account-reset"><span>周恢复：8/2 03:18</span><button class="account-remove">移除</button></div></div>
-              <div class="pool-account"><div class="pool-account-head"><div class="pool-account-identity"><span class="pool-account-icon"><iconify-icon icon="solar:bolt-linear"></iconify-icon></span><strong class="pool-account-name">vip.qq.com · 20x</strong></div><span class="pool-account-status">可用</span></div><div class="pool-account-meta"><span>周剩余 68%</span><span>20x 容量</span></div><div class="pool-meter"><span style="width:68%"></span></div><div class="pool-account-reset"><span>周恢复：8/2 03:18</span><button class="account-remove">移除</button></div></div>
-            </div>
-          </aside>
-        </section>
-
-        <section class="logs card">
-          <div class="logs-head"><div><h2>日志与诊断</h2><div class="tabs" role="tablist"><button class="tab active" data-tab="usage">使用与策略日志</button><button class="tab" data-tab="runtime">插件运行与错误日志</button></div></div><div class="log-tools"><label class="search"><iconify-icon icon="solar:magnifer-linear"></iconify-icon><input placeholder="搜索日志内容"></label><select><option>级别：全部</option><option>仅警告</option><option>仅错误</option></select><select><option>决策：全部</option><option>仅允许</option><option>仅拦截</option></select><select><option>每页 10 条</option><option>每页 20 条</option></select><button class="secondary"><iconify-icon icon="solar:refresh-linear"></iconify-icon>刷新</button></div></div>
-          <div class="table-wrap"><table class="log-table decision-log-table"><thead><tr><th>时间</th><th>Key 备注</th><th>Key</th><th>模型</th><th>决策</th><th>Token</th><th>HTTP</th><th>说明</th></tr></thead><tbody id="log-rows"></tbody></table></div>
-          <div class="pagination"><button>‹</button><button class="current">1</button><button>2</button><button>3</button><button>›</button></div>
-        </section>
-      </div>
-    </main>
-  </div>
-  <script src="app.js"></script>
+  <p>正在打开新的美元额度预览：<a href="./dollar-preview.html">dollar-preview.html</a></p>
 </body>
 </html>

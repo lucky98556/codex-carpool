@@ -10,444 +10,328 @@ import (
 	"testing"
 )
 
-func TestPanelIncludesDateAnalysisAndAccessScheduleControls(t *testing.T) {
+func TestPanelUsesDollarBudgetsAndNoAccountPoolUI(t *testing.T) {
 	page := panelHTML()
-	for _, expected := range []string{
-		`id="analysis-from"`,
-		`id="analysis-to"`,
-		`id="analysis-granularity"`,
-		`id="analysis-apply"`,
-		`<option value="today" selected>今日</option>`,
-		`<option value="hour" selected>按小时</option>`,
-		`applyAnalysisPreset('today')`,
-		`hour:copy('按小时','Hourly')`,
-		`id="access-limited"`,
-		`id="access-weekdays"`,
-		`id="access-timezone"`,
-		`/analysis?`,
-		`access_rules`,
-		`id="access-rule-add"`,
-		`data-access-rule`,
-		`available_from`,
-		`retention_days`,
-		`function renderAccessRules`,
-		`const cpaLocale=`,
-		`const uiText=`,
-		`Accept-Language`,
-		`function showToast`,
-		`id='toast-region'`,
-		`/accounts/refresh`,
-		`function quotaSyncMessage`,
-		`access_schedule_closed`,
-		`quota_allocation_exhausted`,
-		`management_request_failed`,
-		`official quota synchronization failed. See plugin runtime and error logs.`,
-		`diagnosticEvents`,
-		`#toast-region>div`,
-		`const pairs=`,
-		`analysis_reader_degraded`,
-		`Usage analysis is temporarily unavailable. Please retry.`,
-		`class="dashboard-grid"`,
-		`class="key-analysis"`,
-		`id="analysis-metrics"`,
-		`id="model-mix"`,
-		`当前计量 x 用量`,
-		`待官方确认估算`,
-		`Provisional estimate`,
-		`allocationX(window,'provisional')`,
-		`data-cc-label="keyManageAction"`,
-		`data-cc-label="operation"`,
-		`data-key-edit=`,
-		`data-key-reset=`,
-		`data-key-delete=`,
-		`/keys/reset?key_id=`,
-		`key_usage_reset`,
-		`id="decision-clear"`,
-		`id="operation-clear"`,
-		`function clearDecisionLogs()`,
-		`function clearOperationalLogs()`,
-		`api('/logs?key_id='+encodeURIComponent(key.id),{method:'DELETE'})`,
-		`api('/operation-logs',{method:'DELETE'})`,
-		`all logs will be preserved`,
-		`class="pool-card"`,
-		`id="official-account-pool"`,
-		`class="pool-actions"`,
-		`class="pool-button pool-icon-button" id="quota-refresh" aria-label="刷新额度" title="刷新额度"`,
-		`.pool-icon-button{`,
-		`id="cc-icon-shield"`,
-		`id="cc-icon-gauge"`,
-		`id="cc-icon-github"`,
-		`class="github-link"`,
-		`href="https://github.com/lucky98556/codex-carpool"`,
-		`target="_blank" rel="noopener noreferrer"`,
-		`.github-link{`,
-		`class="cc-icon-sprite"`,
-		`--cc-primary:#168a67`,
-		`linear-gradient(145deg,#0b4f3d 0%,#116d51 52%,#239b72 100%)!important`,
-		`#official-account-pool.pool-card{`,
-		`#official-account-pool .pool-button{`,
-		`class="pool-metric"`,
-		`class="pool-account-list"`,
-		`.cc-panel .key-panel>.table-wrap{max-height:270px`,
-		`.cc-panel .pool-account-list{max-height:312px`,
-		`.cc-panel .key-table thead th{position:sticky`,
-		`.cc-panel .key-table th:nth-child(4){width:10%}`,
-		`.cc-panel .key-table th:nth-child(8){width:20%}`,
-		`id="key-usage-heading">官方确认</th>`,
-		`id="key-cycle-heading">周期 Token</th>`,
-		`id="key-total-heading">累计 Token</th>`,
-		`function confirmedAllocationText(window)`,
-		`key.actual_tokens||{}`,
-		`actualAvailable=Boolean(actual.available)`,
-		`actualAvailable&&actual.cycle_known?tokens(actual.cycle):'—'`,
-		`uiText('周期 Token','Cycle Tokens')`,
-		`uiText('累计 Token','Total Tokens')`,
-		`class="key-token-cell"`,
-		`.cc-panel .key-table td.key-row-actions{padding-right:6px!important;padding-left:6px!important}`,
-		`.cc-panel .log-table tbody td{overflow:hidden;text-overflow:ellipsis;white-space:nowrap!important;overflow-wrap:normal!important}`,
-		`.cc-panel .log-table .decision{display:block;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}`,
-		`className='log-column-resizer'`,
-		`role','separator'`,
-		`localStorage.setItem(storageKey,JSON.stringify(widths.map(width=>Math.round(width))))`,
-		`applyLogCellTitles(document.getElementById('logs'))`,
-		`applyLogCellTitles(document.getElementById('operation-logs'))`,
-		`id="decision-log-tools"`,
-		`id="forbidden-log-tools" hidden`,
-		`id="operation-log-tools" hidden`,
-		`.cc-panel .log-tools[hidden]{display:none!important}`,
-		`for(const name of validTabs){const selected=name===tab`,
-		`if(view)view.hidden=!selected;if(tools)tools.hidden=!selected`,
-		`class="log-action-column"`,
-		`.cc-panel .decision-log-table th.log-action-column,.cc-panel .decision-log-table td.log-action{position:sticky!important`,
-		`document.addEventListener('click',event=>{const target=event.target instanceof Element?event.target.closest('[data-log-tab]'):null;`,
-		`window.__ccActivateLogTab=activate`,
-		`document.dispatchEvent(new CustomEvent('codex-carpool:log-tab-changed',{detail:{tab}}))`,
-		`document.addEventListener('codex-carpool:log-tab-changed',()=>requestAnimationFrame(installVisibleTables))`,
-		`#policy-dialog[open],#account-dialog[open],#auth-directory-dialog[open],#log-detail-dialog[open],#content-filter-dialog[open],#quota-debug-dialog[open]{display:flex;flex-direction:column}`,
-		`#policy-dialog .form-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}`,
-		`#policy-dialog::backdrop`,
-		`row.onkeydown=event=>{if(event.target!==row)return;`,
-		`data-key-edit=`,
-		`data-key-delete=`,
-		`request_content`,
-		`请求内容`,
-		`最后一条用户文本（最长 2000 字符）`,
-		`id="log-detail-dialog"`,
-		`class="row-action log-detail-open"`,
-		`data-log-index=`,
-		`set('log-detail-request',log.request_content)`,
-		`$('logs').addEventListener('click'`,
-		`.log-detail-grid{display:grid`,
-		`cells[8].textContent=log.auth_id||'—'`,
-		`面板数据已刷新。`,
-		`Dashboard data refreshed.`,
-		`const toastKey=(ok?'ok:':'error:')+String(value)`,
-		`const dialogMessageIDs=['policy-dialog','account-dialog','auth-directory-dialog','content-filter-dialog','quota-debug-dialog']`,
-		`class="dialog-message" role="alert" aria-live="assertive" hidden`,
-		`.dialog-message[hidden]{display:none}`,
-		`className='account-capacity-field'`,
-		`unit.textContent='x'`,
-		`discoveredCapacity=Number(account.capacity_x)`,
-		`#account-dialog .account-capacity-unit{`,
-		`if(typeof window.__ccRenderAnalysis==='function'){window.__ccRenderAnalysis();return}`,
-		`window.__ccRenderAnalysis=render`,
-		`.cc-panel .legacy-key-detail{width:100%;min-width:0}`,
-		`id="content-filter-open"`,
-		`id="content-filter-enabled"`,
-		`id="content-filter-search"`,
-		`class="content-filter-list-head"`,
-		`class="content-filter-value"`,
-		`#content-filter-dialog{box-sizing:border-box!important;display:none!important;width:min(820px,calc(100vw - 32px))!important`,
-		`#content-filter-dialog>footer{display:flex!important;flex:0 0 auto!important;align-items:center!important;justify-content:flex-end!important`,
-		`id="quota-debug-open"`,
-		`id="forbidden-log-view" class="log-view" hidden`,
-		`id="forbidden-search"`,
-		`id="forbidden-clear"`,
-		`api('/content-filter')`,
-		`api('/forbidden-logs?'+params)`,
-		`['CPA Key 尾号','CPA Key suffix']`,
-		`key?.key_suffix`,
+	for _, marker := range []string{
+		`id="five-hour-budget"`, `id="seven-day-budget"`, `id="rate-card-dialog"`,
+		`id="allowed-models-list"`, `id="allowed-models-search"`, `id="allowed-models-all"`,
+		`id="access-limited"`, `id="access-rule-list"`, `id="access-rule-add"`,
+		`input_usd_per_million`, `cached_usd_per_million`, `output_usd_per_million`,
+		`function enabledCPAAuthEntries(payload)`, `host('/auth-files')`,
+		`host('/auth-files/models?name='+encodeURIComponent(value(auth.id||auth.name)))`,
+		`Promise.allSettled(auths.map(auth=>`, `!file?.disabled&&status!=='disabled'`,
+		`existing catalog was kept; retry later`,
+		`(payload.models||[]).filter(model=>model.available!==false)`,
+		`<th>5 小时</th>`, `<th>7 天</th>`, `<th>消耗（USD）</th>`,
+		`function dollarBudgetText(window)`, `key.actual_tokens||{}`,
+		`function extractCPAKeys(payload)`, `payload?.apiKeys`, `payload?.keys`, `payload?.data`,
+		`allowed_models:Array.from($('policy-dialog').__allowedModels||[])`,
+		`function renderPolicyModels()`,
+		`function readAccessPolicy()`, `$(name+'-log-view')`, `$(name+'-log-tools')`,
+		`input_cost_micros`, `cached_cost_micros`, `output_cost_micros`,
+		`function actualTotalText(key)`, `function renderRangeTokenBreakdown(stats)`,
+		`id="analysis-from"`, `id="analysis-to"`, `id="analysis-granularity"`,
+		`id="content-filter-open"`, `id="logs"`, `id="operation-logs"`,
+		`内容正则拦截`, `使用安全的 RE2 正则表达式`, `maxlength="512" spellcheck="false"`,
+		`搜索表达式或分类`, `添加 RE2 正则表达式`, `命中表达式`,
+		`settings||{enabled:true,terms:[]}`, `const builtin=item.term.source==='builtin'`,
+		`data-remove-term="'+item.index+'"`, `uiText('内置','Built-in')`,
+		`id="decision-log-tools"`, `id="log-detail-dialog"`,
+		`class="meter-workbench card"`, `id="key-detail-panel"`,
+		`id="key-detail-backdrop"`, `id="key-status-filter"`,
+		`class="key-analysis-drawer"`, `class="line-chart"`,
+		`function localDateISO(date=new Date())`, `function elapsedTrendPoints(points,now=Date.now())`,
+		`const values=elapsedTrendPoints(points).slice(-12)`, `const values=elapsedTrendPoints(points).slice(-24)`,
+		`uiText('今日暂无','None today')`, `uiText('暂无活跃数据','No activity data')`,
+		`class="budget-refresh"`, `uiText('下次刷新','Next refresh')`, `window?.refresh_at`,
+		`class="chart-tooltip" role="tooltip" hidden`, `data-chart-point="`,
+		`function chartTooltipHTML(point)`, `function wireLineChartTooltip(node,values)`,
+		`point.input_tokens`, `point.cached_tokens`, `point.output_tokens`, `point.cost_micros`,
+		`id="cost-donut"`, `id="model-ranking"`, `id="usage-heatmap"`,
+		`id="analysis-log-snapshot"`, `id="risk-list"`,
+		`正在连接用量管理`, `插件管理&nbsp; / &nbsp;用量管理</b><span class="utility-meta">`,
+		`已连接用量管理`, `Connected to usage management`,
+		`class="version-badge">v`, `class="github-link"`,
+		`['用量管理','Usage management']`, `const translateExact=value=>`,
+		`document.title=text('用量管理','Usage management')`,
+		`<h2>用量管理</h2>`, `<strong>已添加 Key</strong>`,
+		`uiText('已添加 Key','Added Keys')`, `number((state.summary.keys||[]).length)`,
+		`uiText('额度限制','Budget enforced')`, `uiText('仅统计','Track only')`,
+		`启用额度限制`, `仅统计（超额不限制）`,
+		`Key 添加后始终统计 Token、消耗（USD）、5 小时与 7 天窗口及日志`,
+		`移除 Key`, `uiText('从用量管理中移除此 Key？','Remove this Key from usage management?')`,
+		`uiText('额度设置已保存。','Quota settings saved.')`,
+		`securePrefix='enc::v1::'`, `secureSalt='cli-proxy-api-webui::secure-storage'`,
+		`JSON.parse(decode(raw)||'null')`, `dataset.toastKey`,
+		`await loadKeys();openPolicy(null)`,
+		`async function loadKeys(){const payload=await host('/config')`,
+		`inputPlaceholder=uiText('输入','Input')`,
+		`cachedPlaceholder=uiText('缓存','Cached')`,
+		`outputPlaceholder=uiText('输出','Output')`,
+		`placeholder="'+inputPlaceholder+'" aria-label="'+escapeHTML(inputLabel)+'"`,
+		`id="rate-card-search"`, `id="rate-card-status-filter"`, `id="rate-card-filter-empty"`,
+		`function filterRateRows()`, `function updateRateRowStatus(row)`,
+		`data-rate-search="'+escapeHTML(searchText)+'"`, `data-rate-status="'+(configured?'configured':'missing')+'"`,
+		`const autoRefreshIntervalMS=5*60*1000`,
+		`document.visibilityState!=='visible'`,
+		`window.setInterval(refreshIfDue,autoRefreshIntervalMS)`,
+		`document.addEventListener('visibilitychange',refreshIfDue)`,
+		`refreshPageData({loading:false,resetLogs:false})`,
 	} {
-		if !strings.Contains(page, expected) {
-			t.Fatalf("panel HTML missing %q", expected)
+		if !strings.Contains(page, marker) {
+			t.Fatalf("panel HTML missing %q", marker)
 		}
 	}
-	if strings.Contains(page, `uiText('待确认 +','Provisional +')`) {
-		t.Fatal("Key list must keep provisional usage in the analysis panel instead of repeating it in the table")
+	for _, retired := range []string{`official-account-pool`, `account-dialog`, `auth-directory-dialog`, `account-pool`, `五小时倍率`, `allocation_x`, `账号池`, `class="heading page-head"`, `<h1>codex-carpool`, `CPA Key 美元计量 · 全模型费率 · 5 小时与 7 天滚动预算`} {
+		if strings.Contains(page, retired) {
+			t.Fatalf("new panel still contains retired account-pool/x marker %q", retired)
+		}
 	}
-	if strings.Contains(page, `const quotaDebugActions=document.querySelector('.page-head .actions')`) {
-		t.Fatal("quota diagnostics must be a stable utility action instead of a runtime-inserted button")
+	if strings.Contains(page, `function cycleTokenText(`) || strings.Contains(page, `周期 Token`) {
+		t.Fatal("new panel must not depend on the retired official quota cycle")
 	}
-	if strings.Contains(page, `id="window"`) {
-		t.Fatal("old trend-window selector should not remain after analysis controls replace it")
+	for _, retired := range []string{`modelDefinitionChannels`, `host('/model-definitions/`, `支持的 Codex 模型`, `call('','/v1/models'`} {
+		if strings.Contains(page, retired) {
+			t.Fatalf("new panel still contains retired Codex-only model-sync marker %q", retired)
+		}
 	}
-	if strings.Contains(page, `applyPrototypeLayout`) || strings.Contains(page, `cc-key-analysis`) {
-		t.Fatal("panel must not reparent startup-critical sections at runtime")
+	if strings.Contains(page, `Promise.all([loadKeys(),loadSummary(),loadModels(),loadRates()])`) {
+		t.Fatal("panel boot must not depend on CPA API-key or wallet state")
 	}
-	if strings.Contains(page, `linear-gradient(142deg,#095b4f`) || strings.Contains(page, `#a2ffbd,#55f1c1 54%,#43c7ff`) {
-		t.Fatal("approved light account-pool palette must not retain the retired saturated theme")
+	for _, retired := range []string{`host('/api-keys')`, `wallet must has at least one account`, `现有面板不受影响`} {
+		if strings.Contains(page, retired) {
+			t.Fatalf("panel still contains wallet-dependent CPA Key loading marker %q", retired)
+		}
 	}
-	if strings.Contains(page, `code.iconify.design`) || strings.Contains(page, `<iconify-icon`) {
-		t.Fatal("panel icons must be embedded so the management page has no runtime icon CDN dependency")
+	if strings.Contains(page, `unhandledrejection`) {
+		t.Fatal("panel must not surface unrelated CPA host promise rejections as plugin errors")
 	}
-	if strings.Contains(page, `.pool-panel{background:#f7faff!important`) || strings.Contains(page, `.pool-panel .pool-account{background:#fff!important`) {
-		t.Fatal("account-pool palette must inherit CPA theme variables instead of pinning light colors")
+	for _, retired := range []string{`uiText('管理中 Key','Managed Keys')`, `暂停管理（不限额）`, `解除管理`, `Remove management`} {
+		if strings.Contains(page, retired) {
+			t.Fatalf("panel still contains misleading stopped-accounting copy %q", retired)
+		}
 	}
-	if strings.Contains(page, `.cc-panel .pool-card{background:linear-gradient(145deg,color-mix(in srgb,var(--card,#fff) 96%,#eaf2ff)`) {
-		t.Fatal("retired light account-pool palette must not compete with the approved emerald production theme")
+	for _, retired := range []string{`正在连接 codex-carpool`, `已连接 codex-carpool`, `插件管理&nbsp; / &nbsp;codex-carpool`, `Connecting to codex-carpool`, `Connected to codex-carpool`, `Plugin management / codex-carpool`} {
+		if strings.Contains(page, retired) {
+			t.Fatalf("panel still contains retired product name %q", retired)
+		}
 	}
-	if strings.Contains(page, `id="message"`) || strings.Contains(page, `pageMessage=document.getElementById('message')`) || strings.Contains(page, `.cc-panel .message{`) {
-		t.Fatal("page-level inline messages must not compete with dialog feedback and top-right toasts")
+	for _, retired := range []string{`class="collapsed-analysis-note"`, `统计图默认收起`, `Charts are collapsed by default`, `.cc-panel .collapsed-analysis-note`} {
+		if strings.Contains(page, retired) {
+			t.Fatalf("panel still contains redundant collapsed-chart notice %q", retired)
+		}
 	}
-	if got := strings.Count(page, `class="dialog-message" role="alert" aria-live="assertive" hidden`); got != 5 {
-		t.Fatalf("dialog-local message containers = %d, want 5", got)
+	for _, retired := range []string{`>违禁词拦截<`, `>违禁词日志<`, `>关键词列表<`, `placeholder="添加关键词"`} {
+		if strings.Contains(page, retired) {
+			t.Fatalf("panel still contains retired literal content-filter copy %q", retired)
+		}
 	}
 }
 
-func TestPreviewUsesProductionPanelStylesAsSingleSource(t *testing.T) {
+func TestPanelUsesProductionStylesAndPreviewSource(t *testing.T) {
+	page := panelHTML()
+	for _, marker := range []string{
+		`.cc-panel`, `label.search>input`, `position:sticky!important`,
+		`#content-filter-dialog .content-filter-search input`, `#rate-card-dialog`,
+		`#policy-dialog .policy-models{display:grid!important`,
+		`#policy-dialog .policy-model-item{display:flex!important`,
+		`--cc-primary:#168a67`, `target="_blank" rel="noopener noreferrer"`,
+		`.cc-panel .utility-meta{display:inline-flex`, `.cc-panel .version-badge{display:inline-flex`,
+		`.cc-panel .meter-workbench`, `.cc-panel .key-analysis-drawer`,
+		`#key-detail-backdrop{position:fixed!important;inset:0!important`,
+		`#key-detail-panel{position:fixed!important;inset:0 0 0 auto!important`,
+		`#key-detail-panel>.drawer-body{position:relative!important;display:flex!important`,
+		`#key-detail-panel>.drawer-body>*{flex:0 0 auto!important;width:100%!important`,
+		`#key-detail-panel .drawer-section{height:auto!important;min-height:0!important;overflow:hidden!important`,
+		`#key-detail-panel .cc-icon{display:block!important;width:16px!important`,
+		`#key-detail-panel{left:0!important;right:0!important;width:100%!important`,
+		`#key-detail-panel .detail-section-head{align-items:flex-start!important;flex-direction:column!important`,
+		`.cc-panel .key-action-column,.cc-panel .key-action{position:sticky!important`,
+		`.cc-panel .log-action::before,.cc-panel .log-action::after,.cc-panel .row-action::before,.cc-panel .row-action::after{display:none!important;content:none!important}`,
+		`.cc-panel .log-action{font-size:0!important}`,
+		`.cc-panel .row-action{min-height:30px;padding:0 8px;border-radius:8px;font-size:13px!important}`,
+		`#policy-dialog[open],#rate-card-dialog[open],#log-detail-dialog[open],#key-log-dialog[open],#content-filter-dialog[open]{display:flex!important`,
+		`#policy-dialog>header,#rate-card-dialog>header,#log-detail-dialog>header,#key-log-dialog>header,#content-filter-dialog>header`,
+		`#policy-dialog>.form,#rate-card-dialog>.form,#log-detail-dialog>.form,#key-log-dialog>.form,#content-filter-dialog>.form`,
+		`#policy-dialog button,#rate-card-dialog button,#log-detail-dialog button,#key-log-dialog button,#content-filter-dialog button`,
+		`#policy-dialog button:focus-visible,#rate-card-dialog button:focus-visible,#log-detail-dialog button:focus-visible,#key-log-dialog button:focus-visible,#content-filter-dialog button:focus-visible`,
+		`#rate-card-dialog .rate-card-row{margin-top:8px!important`,
+		`class="rate-card-scroll"`,
+		`#rate-card-dialog>.rate-card-form{display:flex!important;flex-direction:column!important;min-height:0!important;overflow:hidden!important`,
+		`#rate-card-dialog .rate-card-scroll{flex:1 1 auto!important;min-height:0!important`,
+		`overflow-y:auto!important;overflow-x:hidden!important`,
+		`#rate-card-dialog .rate-card-tools{display:grid!important`,
+		`#rate-card-dialog label.rate-card-search{position:relative!important`,
+		`#rate-card-dialog .rate-card-row[hidden],#rate-card-dialog .rate-card-filter-empty[hidden]{display:none!important`,
+		`#log-detail-dialog .log-detail-grid{display:grid!important`,
+		`#policy-dialog .dialog-message,#rate-card-dialog .dialog-message,#content-filter-dialog .dialog-message`,
+		`id="content-filter-enabled" type="checkbox" role="switch"`,
+		`class="content-filter-switch" aria-hidden="true"`,
+		`class="content-filter-count">0 / 0`,
+		`#content-filter-dialog label.content-filter-toggle{position:relative!important;display:grid!important`,
+		`#content-filter-dialog label.content-filter-toggle>input,#content-filter-dialog label.content-filter-term-switch>input{position:absolute!important;width:1px!important`,
+		`#content-filter-dialog .content-filter-list-head,#content-filter-dialog .content-filter-term{display:grid!important`,
+		`class="content-filter-term-switch"`,
+		`#content-filter-dialog #content-filter-value{font-family:`,
+		`#content-filter-dialog .content-filter-fixed{justify-self:end!important`,
+		`#content-filter-dialog .content-filter-help{display:block!important`,
+		`id="access-limited" type="checkbox" role="switch"`,
+		`class="policy-switch" aria-hidden="true"`,
+		`#policy-dialog .schedule-toggle input{position:absolute!important;width:1px!important`,
+		`#policy-dialog .policy-model-item input{flex:0 0 auto!important;width:16px!important;min-width:16px!important;height:16px!important;min-height:16px!important`,
+	} {
+		if !strings.Contains(page, marker) {
+			t.Fatalf("panel HTML missing style guard %q", marker)
+		}
+	}
 	_, sourceFile, _, ok := goruntime.Caller(0)
 	if !ok {
 		t.Fatal("resolve panel test source path")
 	}
-	projectRoot := filepath.Clean(filepath.Join(filepath.Dir(sourceFile), "..", ".."))
-	previewPath := filepath.Join(projectRoot, "ui-preview", "index.html")
+	previewPath := filepath.Join(filepath.Dir(sourceFile), "..", "..", "ui-preview", "dollar-preview.html")
 	raw, err := os.ReadFile(previewPath)
 	if err != nil {
-		t.Fatalf("read UI preview: %v", err)
+		t.Fatalf("read dollar preview: %v", err)
 	}
 	preview := string(raw)
-	for _, expected := range []string{
-		`href="../cmd/codex-carpool/web/styles.css"`,
-		`class="app cc-panel"`,
-		`<th>官方确认</th><th>周期 Token</th><th>累计 Token</th>`,
-		`id="official-account-pool"`,
-		`class="pool-metric"`,
-		`class="pool-account-list"`,
-	} {
-		if !strings.Contains(preview, expected) {
-			t.Fatalf("UI preview missing production-style marker %q", expected)
-		}
-	}
-	for _, retired := range []string{`href="styles.css"`, `href="palette.css"`} {
-		if strings.Contains(preview, retired) {
-			t.Fatalf("UI preview still loads independent style source %q", retired)
-		}
-	}
-	for _, retiredFile := range []string{"styles.css", "palette.css"} {
-		if _, err := os.Stat(filepath.Join(projectRoot, "ui-preview", retiredFile)); !os.IsNotExist(err) {
-			t.Fatalf("preview-only style %s must not exist; stat error = %v", retiredFile, err)
+	for _, marker := range []string{`../cmd/codex-carpool/web/index.html`, `../cmd/codex-carpool/web/styles.css`, `../cmd/codex-carpool/web/app.js`, `managementKey`, `keyDialogLogs`} {
+		if !strings.Contains(preview, marker) {
+			t.Fatalf("dollar preview missing %q", marker)
 		}
 	}
 }
 
-func TestPanelKeepsInteractiveStatesReadableAcrossThemes(t *testing.T) {
+func TestPanelKeepsSearchAndOperationColumnsHostSafe(t *testing.T) {
 	page := panelHTML()
-	for _, expected := range []string{
-		`.cc-panel label.search>input{`,
-		`border:0!important`,
-		`.cc-panel label.search>input#search`,
-		`.cc-panel label.search>input#decision-search`,
-		`.cc-panel label.search>input#operation-search`,
-		`.cc-panel button.primary{`,
-		`background:linear-gradient(135deg,var(--cc-primary),var(--cc-primary-strong))!important`,
-		`.cc-panel .key-table tr.selected{`,
-		`.cc-panel .key-table tbody tr[role="button"].selected{`,
-		`table-layout:fixed!important`,
-		`outline:0!important`,
-		`.cc-panel #keys .pill{background:transparent!important;box-shadow:none!important}`,
-		`.cc-panel .logs .tab[aria-selected="true"]`,
-		`html[data-cpa-theme="dark"] .cc-panel .stats .stat-icon.violet`,
-		`html[data-cpa-theme="dark"] .cc-panel .decision.allow`,
-		`html[data-cpa-theme="dark"] .cc-panel .decision.reject`,
-		`html[data-cpa-theme="dark"] .cc-panel .level.info`,
-		`html[data-cpa-theme="dark"] .cc-panel .log-http.ok`,
-		`statusTone=!account.enabled?`,
-		`pool-account-status '+statusTone`,
-		`cells.length<10`,
-		`badge=cells[5].querySelector('.decision')`,
-		`cells[9].textContent=description`,
+	for _, marker := range []string{
+		`border:0!important`, `box-shadow:none!important`,
+		`.cc-panel label.search>.cc-icon{position:absolute!important`,
+		`.cc-panel label.search>.search-clear{position:absolute!important`,
+		`.cc-panel label.search>.search-clear[hidden]{display:none!important}`,
+		`.cc-panel .mini-trend .mini-dot{fill:var(--cc-primary)`,
+		`.cc-panel .mini-trend-empty{display:grid!important`,
+		`.cc-panel .usage-overview-grid{display:grid!important;grid-template-columns:minmax(0,1fr) 340px!important;align-items:stretch!important`,
+		`.cc-panel .usage-overview-grid>.key-table-wrap{align-self:stretch!important`,
+		`.cc-panel .key-table th:nth-child(1){width:14%}`,
+		`.cc-panel .key-table{min-width:800px;table-layout:fixed}`,
+		`.cc-panel .key-table th:nth-child(4){width:19%}`,
+		`.cc-panel .key-table th:nth-child(7){width:17%;text-align:right}`,
+		`.cc-panel .key-table th,.cc-panel .key-table td{padding-right:10px;padding-left:10px}`,
+		`.cc-panel .key-table .budget-cell em{white-space:nowrap}`,
+		`.cc-panel .key-action{padding-right:4px!important;padding-left:4px!important}`,
+		`.cc-panel .key-row-actions{display:flex!important;align-items:center!important;justify-content:flex-end!important`,
+		`.cc-panel .key-table .pill{white-space:nowrap!important}`,
+		`.cc-panel .mini-trend{display:block;width:100%;max-width:132px;height:34px}`,
+		`.cc-panel .daily-model-card{isolation:isolate!important;align-self:stretch!important;display:flex!important`,
+		`.cc-panel .daily-model-card{width:100%!important;height:auto!important}`,
+		`id="daily-model-ranking" class="daily-model-ranking"`,
+		`id="daily-model-total" class="daily-model-total"`,
+		`function renderDailyModelRanking()`,
+		`api('/model-ranking?'+params)`,
+		`uiText('今日合计','Today total')`,
+		`<td colspan="7" class="empty">'+uiText('暂无已添加 Key`,
+		`.cc-panel .budget-refresh{display:flex!important`,
+		`.cc-panel .chart-tooltip{position:absolute!important`,
+		`.cc-panel .chart-tooltip[hidden]{display:none!important}`,
+		`.cc-panel .line-chart .chart-hit:hover,.cc-panel .line-chart .chart-hit:focus`,
+		`#policy-dialog .policy-model-search>.cc-icon{position:absolute!important`,
+		`#content-filter-dialog .content-filter-search>.cc-icon{position:absolute!important`,
+		`padding:0 10px 0 36px!important`, `text-indent:0!important`,
+		`.cc-panel #toast-region{position:fixed!important;top:22px!important;right:22px!important;bottom:auto!important;left:auto!important`,
+		`id="key-detail-panel"`, `class="key-analysis-drawer"`, `class="log-action-column"`,
+		`position:sticky!important;right:0`, `aria-live="assertive"`,
+		`.cc-panel .log-tools[hidden],.cc-panel .log-view[hidden]{display:none!important}`,
+		`.cc-panel .decision-log-table{min-width:1678px!important`,
+		`.cc-panel .operation-log-table{min-width:1280px!important`,
+		`.cc-panel .forbidden-log-table{min-width:1505px!important`,
+		`.cc-panel .log-table th,.cc-panel .log-table td{min-width:0!important;overflow:hidden!important;text-overflow:ellipsis!important;white-space:nowrap!important}`,
+		`.cc-panel .log-table th:first-child,.cc-panel .log-table td:first-child{min-width:200px!important;width:200px!important;max-width:200px!important;overflow:visible!important;text-overflow:clip!important;white-space:nowrap!important}`,
+		`class="log-request-preview"><span>`, `function previewText(input,max=96)`,
+		`uiText('管理','Manage')`, `uiText('日志','Logs')`, `点击“管理”查看详细分析`,
+		`selectedLogs:[]`, `keyLogs:[]`, `keyTrends:{}`, `dailyModelUsage:{models:[]}`,
+		`id="key-log-dialog"`, `id="key-logs"`, `data-key-log="`,
+		`function renderKeyLogs()`, `async function loadKeyLogs(reset=false)`, `function openKeyLogs(keyID)`,
+		`key_id:state.keyLogKeyID`, `page_size:'10'`,
+		`id="key-log-prev"`, `id="key-log-page-number"`, `id="key-log-next"`,
+		`#key-log-dialog>.key-log-form{display:flex!important`,
+		`#key-log-dialog .key-log-table{min-width:1120px!important;table-layout:fixed!important`,
+		`#key-log-dialog>footer{justify-content:space-between!important`,
+		`['Key 请求日志','Key request logs']`,
+		`const range=todayRange(),keys=state.summary.keys||[]`,
+		`function loadSelectedLogs()`,
+		`const params=new URLSearchParams({page:String(state.decisionPage.page||1)`,
+		`id="decision-query"`, `id="operation-query"`, `id="forbidden-query"`,
+		`const wireLogQuery=(name,loader)=>`, `api('/logs',{method:'DELETE'})`,
+		`data-clear-search="search"`,
+		`data-clear-search="decision-search" data-clear-query="decision-query"`,
+		`data-clear-search="operation-search" data-clear-query="operation-query"`,
+		`data-clear-search="forbidden-search" data-clear-query="forbidden-query"`,
+		`function wireSearchClears()`,
+		`input.dispatchEvent(new Event('input',{bubbles:true}))`,
+		`['清除搜索','Clear search']`,
+		`cpaLocale:locale`,
 	} {
-		if !strings.Contains(page, expected) {
-			t.Fatalf("panel HTML missing interactive-state marker %q", expected)
+		if !strings.Contains(page, marker) {
+			t.Fatalf("panel missing host-isolation marker %q", marker)
 		}
 	}
-	if strings.Contains(page, `'--blue':['--el-color-primary']`) ||
-		strings.Contains(page, `'--green':['--el-color-success']`) ||
-		strings.Contains(page, `'--red':['--el-color-danger']`) {
-		t.Fatal("CPA theme synchronization must not replace the plugin's semantic brand and status colors")
-	}
-	if got := strings.Count(page, `if(from===en&&en==='To')`); got < 2 {
-		t.Fatalf("standalone To localization guards = %d, want both core and log guards so Token is never rewritten", got)
-	}
-	if strings.Contains(page, `cells[2].textContent=output.decision`) ||
-		strings.Contains(page, `cells[3].textContent=output.description+account`) ||
-		strings.Contains(page, `cells[2].textContent=decision`) ||
-		strings.Contains(page, `cells[3].textContent=description+account`) {
-		t.Fatal("decision localization must not overwrite the Key fingerprint or model columns")
-	}
-	if strings.Contains(page, `id="catalog-state"`) {
-		t.Fatal("the retired official-sync tag must not remain in the account-pool header")
-	}
-	if got := strings.Count(page, `badge=cells[5].querySelector('.decision')`); got < 2 {
-		t.Fatalf("decision badge column guards = %d, want both app and bootstrap guards", got)
-	}
-}
-
-func TestPanelEnglishLocaleCoversStaticAndDynamicDashboardCopy(t *testing.T) {
-	page := panelHTML()
-	for _, expected := range []string{
-		`Latest model sync: `,
-		`Quota diagnostics`,
-		`Unconfigured CPA Keys remain unrestricted`,
-		`Official weekly quota · Real-time account health`,
-		`Official quota is synchronized on demand and every 5 minutes`,
-		`Requests safely return 503 when no current official quota snapshot is available.`,
-		`Search model, reason, or account ID`,
-		`Search event, description, account, or Key ID`,
-		`Actual Token trend chart`,
-		`Quota diagnostic content`,
-		`Per page 10`,
-		`Total ')+num(total)+uiText(' 条 · 每页 ',' · Per page '`,
-		`uiText('已耗尽','Exhausted')`,
-		`uiText('可用','Available')`,
-		`uiText('容量','capacity')`,
-		`uiText('额度诊断','Quota diagnostics')`,
-		`const renderHostLabel=()=>`,
-		`english()?'Codex Carpool':'Codex 拼车'`,
-		`Usage, policy decisions, and Token settlements for the selected Key`,
-		`Plugin lifecycle, configuration, official quota sync, and exception records`,
-		`Configure shared account pool`,
-		`CPA authentication directory`,
-		`Pause management (unrestricted)`,
-		`Forbidden-phrase filtering`,
-		`Forbidden-phrase logs`,
-		`Original CPA Key suffix: `,
-	} {
-		if !strings.Contains(page, expected) {
-			t.Fatalf("panel HTML missing bilingual marker %q", expected)
+	for _, retired := range []string{`<th>最近模型</th>`, `['最近模型','Latest model']`, `keyLatestModels`, `<td colspan="8" class="empty">'+uiText('暂无已添加 Key`} {
+		if strings.Contains(page, retired) {
+			t.Fatalf("panel still contains retired latest-model column marker %q", retired)
 		}
 	}
-}
-
-func TestPanelUsesScopedBilingualLoadingFeedback(t *testing.T) {
-	page := panelHTML()
-	for _, expected := range []string{
-		`const loadingTargets={full:`,
-		`node.setAttribute('aria-busy','true')`,
-		`Switching Key…`,
-		`Loading usage analysis…`,
-		`Loading usage logs…`,
-		`Loading runtime logs…`,
-		`Loading forbidden-phrase logs…`,
-		`Refreshing official quota…`,
-		`selected!==state.selected`,
-		`requestID!==decisionRequestID`,
-		`requestID!==operationRequestID`,
-		`.cc-loading-overlay`,
-		`class="cc-loading-title"`,
-		`.cc-panel .cc-loading-title{`,
-		`@media(prefers-reduced-motion:reduce)`,
-	} {
-		if !strings.Contains(page, expected) {
-			t.Fatalf("panel HTML missing loading-feedback marker %q", expected)
+	for _, retired := range []string{`.cc-panel #keys tr{cursor:pointer}`, `.cc-panel #keys tr.selected`, `row.classList.toggle('selected'`, `tabindex="0" role="button"`} {
+		if strings.Contains(page, retired) {
+			t.Fatalf("Key list still contains retired row-selection marker %q", retired)
 		}
 	}
-	if strings.Contains(page, `document.body.classList.add('cc-module-loading')`) {
-		t.Fatal("loading feedback must stay scoped to dashboard modules")
+	if strings.Contains(page, `uiText('待确认 +','Provisional +')`) || strings.Contains(page, `allocation_x`) {
+		t.Fatal("panel must not render legacy provisional or x allocation values")
 	}
-}
-
-func TestPanelUsesEmbeddedTemplateWithBoundedModelSyncAndObservation(t *testing.T) {
-	page := panelHTML()
-	if strings.Contains(panelTemplate, `strings.ReplaceAll(page,`) {
-		t.Fatal("embedded panel must not retain runtime rewrite chains")
+	if strings.Contains(page, `key-detail-drawer`) {
+		t.Fatal("panel must not use the retired oversized detail drawer")
 	}
-	if strings.Contains(page, `Promise.all(auths.map`) {
-		t.Fatal("model synchronization must not fan out unbounded requests per account")
-	}
-	for _, expected := range []string{
-		`modelCatalogFreshForMs=30*60*1000`,
-		`modelSyncConcurrency=2`,
-		`mapWithConcurrency`,
-		`if(auths.length){const results=await mapWithConcurrency`,
-		`window.__ccSyncLocale`,
-		`__ccFetchTimeoutInstalled`,
-		`mutationTimeoutMs=30000`,
-		`const requestSignal=typeof Request!=='undefined'&&input instanceof Request?input.signal:undefined;`,
-		`__ccPanelBridge?.attach?.`,
-		`__ccPanelBridge?.afterRender?.()`,
-		`function render(){renderStats();renderKeys();renderDetail();renderLogs();renderOperationalLogs();window.__ccPanelBridge?.afterRender?.()}`,
-		`decision-log-table`,
-		`log-key-fingerprint`,
-		`allowed.slice(0,3)`,
-		`title="'+escapeHTML(allModels)+'"`,
-		`usage-line-canvas`,
-		`line-chart-tooltip`,
-		`context.strokeStyle='#168a67'`,
-		`window.__ccRenderUsageLineChart=renderUsageLineChart`,
-		`window.state=panel.state`,
-		`window.tokens=panel.tokens`,
-		`batchLocalizer('__ccLocalizeCore')`,
-		`window.requestAnimationFrame||window.setTimeout`,
-		`observer.observe(document.body,{childList:true,subtree:true})`,
-		`Account-pool configuration removed.`,
-		`Select a managed Key first.`,
-		`Generate quota diagnostics first.`,
-	} {
-		if !strings.Contains(page, expected) {
-			t.Fatalf("panel HTML missing bounded-performance marker %q", expected)
+	for _, retired := range []string{`Key 额度管理`, `Key 美元额度策略已保存`, `美元消耗`, `编辑策略`, `受控 Key`} {
+		if strings.Contains(page, retired) {
+			t.Fatalf("panel still contains retired user-facing copy %q", retired)
 		}
 	}
-	if strings.Contains(page, `function render(){renderStats();renderKeys();renderDetail();renderLogs();renderOperationalLogs()}window.__ccPanelBridge?.afterRender?.()`) {
-		t.Fatal("panel render bridge runs outside render(), so async data refreshes can restore the legacy detail layout")
+	if strings.Contains(page, `uiText('展开','Open')`) || strings.Contains(page, `点击“展开”`) {
+		t.Fatal("Key list management action must not retain the retired expand label")
 	}
-	if strings.Contains(page, `<td class="decision `) {
-		t.Fatal("decision badge classes must not replace table-cell display semantics")
+	if strings.Count(page, `清除日志`) < 3 || strings.Contains(page, `>清除</button>`) {
+		t.Fatalf("all three log tabs must use the explicit clear-log copy, got %d", strings.Count(page, `清除日志`))
 	}
-	// Two observers mirror CPA theme state and one batched observer localizes
-	// newly rendered fragments. Per-localizer observers remain disabled so a
-	// log refresh cannot trigger several full subtree scans.
-	if got := strings.Count(page, `new MutationObserver`); got != 3 {
-		t.Fatalf("active panel observer count = %d, want 3 bounded observers", got)
+	if count := strings.Count(page, `class="search-clear"`); count != 4 {
+		t.Fatalf("dashboard searches must expose four stable inline clear controls, got %d", count)
 	}
-	if strings.Contains(page, `window.MutationObserver=`) {
-		t.Fatal("panel must not override the browser MutationObserver API")
+	for _, retired := range []string{`.slice(0,30)`, `latestModel=(state.logs||[]).find`, `api('/logs?key_id='+encodeURIComponent(state.selected),{method:'DELETE'})`, `key_id:state.selected,page:String(state.decisionPage.page`} {
+		if strings.Contains(page, retired) {
+			t.Fatalf("panel still couples public Key data or logs to selection via %q", retired)
+		}
 	}
-	observerStart := strings.LastIndex(page, `const observer=new MutationObserver`)
-	if observerStart < 0 || strings.Contains(page[observerStart:], `characterData`) {
-		t.Fatal("live locale observation must not rescan text mutations after every dynamic render")
+	for _, retired := range []string{`class="weekly-bars"`, `.cc-panel .weekly-bars`, `.cc-panel .bars{`, `sparkBars`} {
+		if strings.Contains(page, retired) {
+			t.Fatalf("panel must not keep retired bar-only trend marker %q", retired)
+		}
 	}
-	if strings.Contains(page[observerStart:], `observer.observe(document.documentElement`) {
-		t.Fatal("live locale observation must not watch the plugin's own lang attribute")
+	for _, retired := range []string{`function defaultSparkPoints(`, `const iso=now.toISOString().slice(0,10)`, `from.toISOString().slice(0,10)`, `today.toISOString().slice(0,10)`} {
+		if strings.Contains(page, retired) {
+			t.Fatalf("today trend must not use synthetic data or UTC calendar dates via %q", retired)
+		}
 	}
-	if !strings.Contains(page, `event.stopPropagation();const key=keyFor`) {
-		t.Fatal("Key row actions must stop click propagation before editing or deleting")
-	}
-	if strings.Contains(page, `[' 页','']`) || !strings.Contains(page, `[' 页','\u200B']`) {
-		t.Fatal("page localization must not use an empty reverse page-suffix mapping")
-	}
-	if strings.Contains(page, panelUnsafeLogTranslator) || !strings.Contains(page, `output.replace(/\bTo\b/g,to)`) {
-		t.Fatal("page localization must preserve Token while translating the standalone word To")
-	}
-	if strings.Contains(page, `window.addEventListener('languagechange',sync)`) {
-		t.Fatal("panel must not retain the pre-refactor locale handler")
-	}
-	// Adjacent IIFEs are used for isolated panel enhancements. The separator is
-	// essential: without it, the browser tries to invoke the first IIFE result.
-	if strings.Contains(page, `dialog.addEventListener('close',()=>clear(dialog))})
-
-(()=>`) {
-		t.Fatal("adjacent panel IIFEs must have an explicit statement boundary")
-	}
-	if !strings.Contains(page, `dialog.addEventListener('close',()=>clear(dialog))});`) {
-		t.Fatal("dialog error handler must terminate before the following enhancement IIFE")
-	}
-	coreAttach := strings.Index(page, `window.__ccPanelBridge?.attach?.({state,render,renderLogs,renderOperationalLogs,cpaLocale,uiText,tokens,showToast,say});})();`)
-	dialogEnhancement := strings.Index(page, `const clear=dialog=>{const node=dialog.querySelector('.dialog-message')`)
-	if coreAttach < 0 || dialogEnhancement < 0 || coreAttach > dialogEnhancement {
-		t.Fatal("panel closure state must attach to the bridge before independent enhancement IIFEs run")
-	}
-	if strings.Contains(page[dialogEnhancement:], `dialogMessageIDs.map($)`) {
-		t.Fatal("independent dialog enhancement must not reference main-IIFE private identifiers")
+	for _, retired := range []string{
+		"\n.dialog-message{",
+		"\n.dialog-message.ok{",
+		"\n.rate-card-head{",
+		"\n.rate-card-row{",
+		"\n.rate-status{",
+		"\n.rate-card-add,",
+		"\n.log-detail-grid{",
+		"\n.log-detail-section{",
+	} {
+		if strings.Contains(page, retired) {
+			t.Fatalf("panel must not keep unscoped dialog style marker %q", retired)
+		}
 	}
 }

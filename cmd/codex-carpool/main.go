@@ -59,6 +59,7 @@ import (
 
 const (
 	pluginName             = "codex-carpool"
+	pluginDisplayName      = "用量管理"
 	pluginGitHubRepository = "https://github.com/lucky98556/codex-carpool"
 	apiPrefix              = "/v0/management/" + pluginName
 	requestContextHeader   = "X-Codex-Carpool-Request-ID"
@@ -121,9 +122,8 @@ func managementFailure(request pluginapi.ManagementRequest, status int, cause er
 
 func managementFailureShouldLog(code string) bool {
 	switch code {
-	case "engine_unavailable", "shutdown_in_progress", "quota_synchronizer_unavailable",
-		"quota_refresh_unavailable", "usage_records_unavailable", "model_catalog_unavailable",
-		"usage_analysis_unavailable", "account_discovery_failed", "operation_failed":
+	case "engine_unavailable", "shutdown_in_progress", "usage_records_unavailable",
+		"model_catalog_unavailable", "usage_analysis_unavailable", "operation_failed":
 		return true
 	default:
 		return false
@@ -148,48 +148,6 @@ func safeManagementFailureDetail(cause error) string {
 	return message
 }
 
-// localizedQuotaReadiness prevents a transient upstream error string from
-// leaking through otherwise localized success/202 responses. Its original,
-// bounded diagnostic remains in the plugin's operational log.
-func localizedQuotaReadiness(language string, readiness quotaSnapshotReadiness) quotaSnapshotReadiness {
-	if len(readiness.Errors) == 0 {
-		return readiness
-	}
-	localized := readiness
-	localized.Errors = make(map[string]string, len(readiness.Errors))
-	message := localizedManagementMessage(language,
-		"官方额度同步失败，请查看插件运行与错误日志。",
-		"Official quota synchronization failed. See plugin runtime and error logs.")
-	for authID := range readiness.Errors {
-		localized.Errors[authID] = message
-	}
-	return localized
-}
-
-// localizedAccountPoolSnapshots clones only the management response. The
-// engine's durable official snapshot is intentionally left untouched so its
-// operational logs and retry logic retain the original diagnostic context.
-func localizedAccountPoolSnapshots(language string, accounts []quota.AccountPoolSnapshot) []quota.AccountPoolSnapshot {
-	localized := append([]quota.AccountPoolSnapshot(nil), accounts...)
-	message := localizedManagementMessage(language,
-		"官方额度同步失败，请查看插件运行与错误日志。",
-		"Official quota synchronization failed. See plugin runtime and error logs.")
-	for index := range localized {
-		if localized[index].Quota == nil || strings.TrimSpace(localized[index].Quota.LastError) == "" {
-			continue
-		}
-		snapshot := *localized[index].Quota
-		snapshot.LastError = message
-		localized[index].Quota = &snapshot
-	}
-	return localized
-}
-
-func localizedSummary(language string, summary quota.SummarySnapshot) quota.SummarySnapshot {
-	summary.Accounts = localizedAccountPoolSnapshots(language, summary.Accounts)
-	return summary
-}
-
 func managementErrorCode(cause error) string {
 	message := strings.ToLower(strings.TrimSpace(cause.Error()))
 	switch {
@@ -203,8 +161,6 @@ func managementErrorCode(cause error) string {
 		return "api_key_required"
 	case strings.Contains(message, "key_id is required"):
 		return "key_id_required"
-	case strings.Contains(message, "auth_id is required"):
-		return "auth_id_required"
 	case strings.Contains(message, "analysis timezone"):
 		return "analysis_timezone_invalid"
 	case strings.Contains(message, "analysis dates must use"):
@@ -219,44 +175,22 @@ func managementErrorCode(cause error) string {
 		return "trend_request_invalid"
 	case strings.Contains(message, "access_rules") || strings.Contains(message, "access_timezone"):
 		return "access_schedule_invalid"
-	case strings.Contains(message, "is retired; configure"):
-		return "retired_policy_field"
-	case strings.Contains(message, "exceed the enabled account pool") || strings.Contains(message, "exceeds the remaining shared pool"):
-		return "shared_pool_capacity_exceeded"
-	case strings.Contains(message, "account pool entries are required"):
-		return "account_pool_empty"
-	case strings.Contains(message, "account pool repeats") || strings.Contains(message, "auth_index") && strings.Contains(message, "already configured"):
-		return "account_pool_duplicate"
-	case strings.Contains(message, "account pool membership") && strings.Contains(message, "cannot change"):
-		return "account_pool_window_locked"
-	case strings.Contains(message, "cannot remove account") && strings.Contains(message, "awaiting terminal usage"):
-		return "account_has_pending_usage"
-	case strings.Contains(message, "cannot remove account") && strings.Contains(message, "official weekly"):
-		return "account_window_locked"
-	case strings.Contains(message, "account pool entry") && strings.Contains(message, "was not found"):
-		return "account_not_found"
-	case strings.Contains(message, "is not in the shared pool"):
-		return "account_not_in_pool"
+	case strings.Contains(message, "invalid re2 expression"):
+		return "content_filter_expression_invalid"
+	case strings.Contains(message, "content-filter expression") && strings.Contains(message, "must not match empty"):
+		return "content_filter_expression_empty"
+	case strings.Contains(message, "content-filter term") || strings.Contains(message, "content-filter categor"):
+		return "content_filter_expression_invalid"
 	case strings.Contains(message, "cannot rebind key policy"):
 		return "policy_has_pending_usage"
 	case strings.Contains(message, "api key fingerprint is already managed"):
 		return "api_key_already_managed"
 	case strings.Contains(message, "model catalog is empty"):
 		return "model_catalog_empty"
-	case strings.Contains(message, "is not in the synchronized cpa codex model catalog"):
+	case strings.Contains(message, "is not in the synchronized cpa model catalog"):
 		return "model_not_in_catalog"
 	case strings.Contains(message, "key policy") && strings.Contains(message, "was not found"):
 		return "policy_not_found"
-	case strings.Contains(message, "require a plugin restart"):
-		return "restart_required"
-	case strings.Contains(message, "request_units cannot change"):
-		return "request_units_window_locked"
-	case strings.Contains(message, "official quota synchronizer is unavailable"):
-		return "quota_synchronizer_unavailable"
-	case strings.Contains(message, "quota refresh") && strings.Contains(message, "cooldown"):
-		return "quota_refresh_cooldown"
-	case strings.Contains(message, "no immediate account quota refresh task"):
-		return "quota_refresh_unavailable"
 	case strings.Contains(message, "read usage records"):
 		return "usage_records_unavailable"
 	case strings.Contains(message, "read model catalog"):
@@ -265,8 +199,6 @@ func managementErrorCode(cause error) string {
 		return "route_not_found"
 	case strings.Contains(message, "usage analysis is temporarily unavailable"):
 		return "usage_analysis_unavailable"
-	case strings.Contains(message, "discover") || strings.Contains(message, "auth file"):
-		return "account_discovery_failed"
 	default:
 		return "operation_failed"
 	}
@@ -285,8 +217,6 @@ func localizedManagementError(language, code string) string {
 		chinese, english = "纳入管理时必须选择一个 CPA Key。", "Select a CPA Key before managing it."
 	case "key_id_required":
 		chinese, english = "请选择要操作的 Key。", "Select a Key to continue."
-	case "auth_id_required":
-		chinese, english = "请选择要操作的 Codex 账号。", "Select a Codex account to continue."
 	case "analysis_timezone_invalid":
 		chinese, english = "统计时区无效，请使用 IANA 时区（例如 Asia/Shanghai）。", "The reporting time zone is invalid. Use an IANA time zone such as Asia/Shanghai."
 	case "analysis_date_invalid":
@@ -301,44 +231,20 @@ func localizedManagementError(language, code string) string {
 		chinese, english = "趋势统计参数无效。", "The trend request is invalid."
 	case "access_schedule_invalid":
 		chinese, english = "访问时段配置无效，请检查时区、星期和起止时间。", "The access schedule is invalid. Check the time zone, weekdays, and start/end times."
-	case "retired_policy_field":
-		chinese, english = "该旧版额度字段已不再支持，请使用共享池分配（x）和当前策略字段。", "This legacy quota field is no longer supported. Use shared-pool allocation (x) and current policy fields."
-	case "shared_pool_capacity_exceeded":
-		chinese, english = "共享账号池剩余可分配 x 不足，无法保存此分配。", "The shared account pool does not have enough remaining x allocation for this change."
-	case "account_pool_empty":
-		chinese, english = "请至少选择一个共享账号池账号。", "Select at least one shared account-pool account."
-	case "account_pool_duplicate":
-		chinese, english = "账号池存在重复账号或重复 CPA 调度身份。", "The account pool contains a duplicate account or CPA scheduler identity."
-	case "account_pool_window_locked":
-		chinese, english = "当前官方周账期尚未结束，暂不能变更账号池成员、容量或启用状态。", "The current official weekly window has not ended, so account-pool members, capacity, and enabled state cannot change yet."
-	case "account_has_pending_usage":
-		chinese, english = "该账号仍有等待实际用量回调的请求，暂不能移除。", "This account still has requests awaiting terminal usage, so it cannot be removed yet."
-	case "account_window_locked":
-		chinese, english = "该账号当前官方周账期尚未结束，暂不能移除。", "This account cannot be removed until its current official weekly window resets."
-	case "account_not_found":
-		chinese, english = "未找到该共享账号池账号。", "The shared account-pool account was not found."
-	case "account_not_in_pool":
-		chinese, english = "该账号不在当前共享账号池中。", "This account is not in the current shared account pool."
+	case "content_filter_expression_invalid":
+		chinese, english = "正则表达式无效，请检查 RE2 语法、长度和重复项。", "The regular expression is invalid. Check its RE2 syntax, length, and duplicates."
+	case "content_filter_expression_empty":
+		chinese, english = "正则表达式不能匹配空内容，请缩小匹配范围。", "The regular expression must not match empty content. Narrow its match scope."
 	case "policy_has_pending_usage":
 		chinese, english = "该 Key 仍有等待实际用量回调的请求，暂不能更换绑定的 CPA Key。", "This Key still has requests awaiting terminal usage, so its bound CPA Key cannot be replaced yet."
 	case "api_key_already_managed":
-		chinese, english = "该 CPA Key 已被其他策略管理。", "This CPA Key is already managed by another policy."
+		chinese, english = "该 CPA Key 已添加，请直接编辑现有设置。", "This CPA Key has already been added. Edit its existing settings instead."
 	case "model_catalog_empty":
-		chinese, english = "暂无可用的 Codex 模型目录，请先同步模型。", "No Codex model catalog is available. Sync models first."
+		chinese, english = "暂无可用的 CPA 模型目录，请先同步模型。", "No CPA model catalog is available. Sync models first."
 	case "model_not_in_catalog":
-		chinese, english = "选择的模型不在当前 CPA Codex 模型目录中，请同步后重试。", "A selected model is not in the current CPA Codex model catalog. Sync and retry."
+		chinese, english = "选择的模型不在当前 CPA 模型目录中，请同步后重试。", "A selected model is not in the current CPA model catalog. Sync and retry."
 	case "policy_not_found":
-		chinese, english = "未找到该 Key 管理策略。", "The Key management policy was not found."
-	case "restart_required":
-		chinese, english = "修改数据库路径或 Key 加密密钥后需要重启插件并迁移 Key。", "Changing the database path or Key encryption secret requires a plugin restart and Key migration."
-	case "request_units_window_locked":
-		chinese, english = "当前仍有未结算请求或未结束的官方周账期，暂不能修改请求计量单位。", "Request units cannot change while requests are unsettled or official weekly windows remain active."
-	case "quota_synchronizer_unavailable":
-		chinese, english = "官方额度同步器暂不可用，请稍后重试。", "The official quota synchronizer is temporarily unavailable. Please retry."
-	case "quota_refresh_cooldown":
-		chinese, english = "官方额度刚刷新过，请稍后再试。", "Official quota was refreshed recently. Please retry shortly."
-	case "quota_refresh_unavailable":
-		chinese, english = "当前没有可立即刷新官方额度的账号。", "No account is currently available for an immediate official-quota refresh."
+		chinese, english = "未找到该 Key 的额度设置。", "The quota settings for this Key were not found."
 	case "usage_records_unavailable":
 		chinese, english = "使用记录暂时不可读取，请稍后重试。", "Usage records are temporarily unavailable. Please retry."
 	case "model_catalog_unavailable":
@@ -347,8 +253,6 @@ func localizedManagementError(language, code string) string {
 		chinese, english = "未找到插件管理接口。", "The plugin management route was not found."
 	case "usage_analysis_unavailable":
 		chinese, english = "用量分析暂时不可用，请稍后重试。", "Usage analysis is temporarily unavailable. Please retry."
-	case "account_discovery_failed":
-		chinese, english = "读取 CPA Codex 账号失败，请检查认证目录后重试。", "Could not read CPA Codex accounts. Check the auth directory and retry."
 	}
 	return localizedManagementMessage(language, chinese, english)
 }
@@ -378,26 +282,16 @@ func localizedAdmissionMessage(language, code, fallback string) string {
 		chinese, english = "当前时间不在此 Key 允许访问的时段内。", "The current time is outside this API Key's allowed access schedule."
 	case "model_not_allowed":
 		chinese, english = "此 Key 不允许使用所请求的模型。", "This API Key is not allowed to use the requested model."
+	case "model_rate_not_configured":
+		chinese, english = "所请求模型尚未配置费率。", "The requested model has no configured rate."
+	case "key_dollar_budget_exhausted":
+		chinese, english = "此 Key 已达到设置的额度。", "This API key has reached its configured quota."
 	case "content_forbidden":
-		chinese, english = "请求内容触发违禁词策略，已拒绝处理。", "The request was rejected because it matched the forbidden-phrase policy."
-	case "quota_account_source_conflict":
-		chinese, english = "共享账号身份正在核验或存在冲突，受控 Key 已暂停。", "Shared account identities are being verified or have a conflict; managed API Keys are paused."
+		chinese, english = "请求内容命中拦截表达式，已拒绝处理。", "The request was rejected because it matched a content-blocking expression."
 	case "quota_persistence_unavailable":
 		chinese, english = "额度账本暂不可用，请稍后重试。", "The quota ledger is temporarily unavailable. Please retry."
 	case "quota_scheduler_candidates_required":
-		chinese, english = "CPA 未提供可用的 Codex 调度账号候选。", "CPA did not provide usable Codex scheduler account candidates."
-	case "quota_pool_unconfigured":
-		chinese, english = "尚未配置可用的 Codex 共享账号池。", "No usable Codex shared account pool is configured."
-	case "quota_snapshot_unavailable":
-		chinese, english = "暂无可用的官方额度快照，请稍后重试。", "No current official quota snapshot is available. Please retry."
-	case "quota_candidate_mismatch":
-		chinese, english = "CPA 当前调度账号与共享账号池不匹配。", "CPA's current scheduler candidates do not match the shared account pool."
-	case "quota_pool_exhausted":
-		chinese, english = "共享账号池的官方额度已耗尽。", "The shared account pool's official quota is exhausted."
-	case "quota_allocation_exhausted":
-		chinese, english = "该 Key 在当前官方账期内的共享池分配已用完。", "This API Key has exhausted its shared-pool allocation for the current official window."
-	case "quota_account_unavailable":
-		chinese, english = "当前没有可用的共享 Codex 账号。", "No shared Codex account is currently available."
+		chinese, english = "CPA 未提供可用的调度账号候选。", "CPA did not provide usable scheduler account candidates."
 	}
 	return localizedManagementMessage(language, chinese, english)
 }
@@ -456,27 +350,6 @@ type policyRequest struct {
 	APIKey string          `json:"api_key"`
 }
 
-// rejectRetiredPolicyFields keeps the management API aligned with the single
-// allocation_x product model. SQLite migration still reads retired fields from
-// older rows, but a current client must never silently accept a setting that
-// codex-carpool no longer enforces.
-func rejectRetiredPolicyFields(raw []byte) error {
-	var envelope struct {
-		Policy map[string]json.RawMessage `json:"policy"`
-	}
-	if err := json.Unmarshal(raw, &envelope); err != nil {
-		return err
-	}
-	for field := range envelope.Policy {
-		normalized := strings.ToLower(strings.ReplaceAll(field, "_", ""))
-		switch normalized {
-		case "groupid", "fivehourpercent", "sevendaypercent", "fivehourmultiplier", "sevendaymultiplier", "maxconcurrency":
-			return fmt.Errorf("%s is retired; configure name, allocation_x, allowed_models, access_rules, access_timezone, and enabled instead", field)
-		}
-	}
-	return nil
-}
-
 type setupRequest struct {
 	Settings quota.InstallationSettings `json:"settings"`
 }
@@ -485,12 +358,8 @@ type modelsRequest struct {
 	Models []quota.ModelCatalogEntry `json:"models"`
 }
 
-type accountRequest struct {
-	Account quota.AccountPoolEntry `json:"account"`
-}
-
-type accountsRequest struct {
-	Accounts []quota.AccountPoolEntry `json:"accounts"`
+type ratesRequest struct {
+	Rates []quota.ModelRate `json:"rates"`
 }
 
 type contentFilterRequest struct {
@@ -498,10 +367,8 @@ type contentFilterRequest struct {
 }
 
 var runtime struct {
-	mu            sync.RWMutex
-	accountPoolMu sync.Mutex
-	engine        *quota.Engine
-	syncer        *quotaSynchronizer
+	mu     sync.RWMutex
+	engine *quota.Engine
 }
 
 func main() {}
@@ -576,60 +443,30 @@ func cliproxyPluginShutdown() {
 	defer func() { _ = recover() }()
 	runtime.mu.Lock()
 	engine := runtime.engine
-	syncer := runtime.syncer
 	runtime.mu.Unlock()
 	if engine == nil {
-		if syncer != nil {
-			syncer.Close()
-		}
-		runtime.mu.Lock()
-		if runtime.syncer == syncer {
-			runtime.syncer = nil
-		}
-		runtime.mu.Unlock()
 		return
 	}
 	engine.LogOperational("info", "plugin_stopping", "插件正在停止", "", "")
-	// Stop new admissions before deciding whether the synchronizer can exit.
-	// If a terminal callback is missing, the synchronizer must remain alive to
-	// obtain the next official weekly snapshot, which safely ends that old
-	// reservation. Stopping it first would make shutdown wait forever.
+	// Stop new admissions before draining terminal CPA settlements.
 	engine.CloseAdmissions()
-	if syncer != nil {
-		// Keep normal credential renewal available while a missing terminal
-		// callback is reconciled. A cached OAuth access token can expire before
-		// Codex's weekly reset; the synchronizer enters cache-only final shutdown
-		// only after the accounting drain has reached zero.
-		syncer.BeginShutdownDrain()
-	}
 	deadline := time.Now().Add(pluginShutdownDrainTimeout)
 	for engine.PendingSettlementCount() > 0 && time.Now().Before(deadline) {
 		time.Sleep(time.Second)
 	}
 	conservative := engine.PendingSettlementCount() > 0
 	if conservative {
-		engine.LogOperational("warn", "plugin_shutdown_conservative", "关闭等待超时，已保留未结算请求的持久化标记；下次启动时继续等待实际用量结算", "", "")
-		log.Printf("codex-carpool shutdown drain timed out; preserving %d durable reservations", engine.PendingSettlementCount())
+		engine.LogOperational("warn", "plugin_shutdown_conservative", "关闭等待超时，将保存未结算请求的回调标记；插件重载后可继续匹配实际 Token", "", "")
+		log.Printf("codex-carpool shutdown drain timed out; checkpointing %d callback markers", engine.PendingSettlementCount())
 	}
-	if syncer != nil {
-		syncer.Close()
-	}
-	runtime.mu.Lock()
-	if runtime.syncer == syncer {
-		runtime.syncer = nil
-	}
-	runtime.mu.Unlock()
-
 	var err error
 	if conservative {
 		err = engine.CloseConservatively()
 	} else {
 		err = engine.Close()
 		if err != nil {
-			// SQLite can still fail after all callbacks drained. Preserve the
-			// durable reservation state and return from the native callback rather
-			// than retrying forever inside CPA's synchronous shutdown ABI.
-			engine.LogOperational("warn", "plugin_shutdown_conservative", "关闭持久化超时，已保留可恢复的结算标记", "", "")
+			// Do not retry forever inside CPA's synchronous shutdown ABI.
+			engine.LogOperational("warn", "plugin_shutdown_conservative", "关闭持久化失败，请检查插件运行日志", "", "")
 			err = engine.CloseConservatively()
 		}
 	}
@@ -669,40 +506,36 @@ func handleMethod(method string, request []byte) ([]byte, error) {
 			Routes: []managementRoute{
 				{Method: http.MethodGet, Path: "/" + pluginName + "/setup", Description: "Returns codex-carpool metering settings."},
 				{Method: http.MethodPut, Path: "/" + pluginName + "/setup", Description: "Saves codex-carpool settings without editing CLIProxyAPI configuration."},
-				{Method: http.MethodGet, Path: "/" + pluginName + "/summary", Description: "Returns shared-pool allocation, official snapshots, and Key usage counters."},
+				{Method: http.MethodGet, Path: "/" + pluginName + "/summary", Description: "Returns Key dollar budgets, settled spend, and Token usage counters."},
 				{Method: http.MethodGet, Path: "/" + pluginName + "/keys", Description: "Lists downstream API Key policies without secrets."},
-				{Method: http.MethodPost, Path: "/" + pluginName + "/keys", Description: "Creates a shared-pool allocation policy for a CPA API Key."},
-				{Method: http.MethodPut, Path: "/" + pluginName + "/keys", Description: "Updates a Key allocation, model policy, remark, or management state."},
+				{Method: http.MethodPost, Path: "/" + pluginName + "/keys", Description: "Creates a five-hour and seven-day dollar budget policy for a CPA API Key."},
+				{Method: http.MethodPut, Path: "/" + pluginName + "/keys", Description: "Updates a Key dollar budget, remark, or budget-enforcement state."},
 				{Method: http.MethodDelete, Path: "/" + pluginName + "/keys", Description: "Deletes one Key policy and its plugin-owned history."},
 				{Method: http.MethodPost, Path: "/" + pluginName + "/keys/reset", Description: "Resets one Key's plugin-owned usage while preserving its policy."},
 				{Method: http.MethodGet, Path: "/" + pluginName + "/records", Description: "Lists compact usage buckets for one Key."},
 				{Method: http.MethodGet, Path: "/" + pluginName + "/trend", Description: "Returns real completed-token trend bins for one Key."},
 				{Method: http.MethodGet, Path: "/" + pluginName + "/analysis", Description: "Returns daily, monthly, or yearly completed-token analysis for one Key and a selected date range."},
+				{Method: http.MethodGet, Path: "/" + pluginName + "/model-ranking", Description: "Returns the all-Key daily model Token and dollar usage ranking."},
 				{Method: http.MethodGet, Path: "/" + pluginName + "/logs", Description: "Filters and pages compact per-Key routing and usage decision logs."},
 				{Method: http.MethodDelete, Path: "/" + pluginName + "/logs", Description: "Clears routing and usage decision logs for one Key without changing its quota."},
-				{Method: http.MethodGet, Path: "/" + pluginName + "/debug/quota", Description: "Returns a copy-safe local Token-guard and official-week allocation diagnosis for one Key."},
 				{Method: http.MethodGet, Path: "/" + pluginName + "/operation-logs", Description: "Lists plugin runtime and error logs."},
 				{Method: http.MethodDelete, Path: "/" + pluginName + "/operation-logs", Description: "Clears plugin runtime and error logs without changing Key usage or quota."},
-				{Method: http.MethodGet, Path: "/" + pluginName + "/content-filter", Description: "Returns the optional literal forbidden-phrase filter and its built-in/custom terms."},
-				{Method: http.MethodPut, Path: "/" + pluginName + "/content-filter", Description: "Atomically enables, disables, or updates literal forbidden-phrase filtering."},
-				{Method: http.MethodGet, Path: "/" + pluginName + "/forbidden-logs", Description: "Filters and pages dedicated forbidden-phrase interception logs."},
-				{Method: http.MethodDelete, Path: "/" + pluginName + "/forbidden-logs", Description: "Clears forbidden-phrase interception logs for one Key or all Keys without changing quota or other logs."},
-				{Method: http.MethodGet, Path: "/" + pluginName + "/models", Description: "Lists the CPA-synchronized Codex model catalog."},
-				{Method: http.MethodPut, Path: "/" + pluginName + "/models", Description: "Replaces the CPA-synchronized Codex model catalog."},
-				{Method: http.MethodGet, Path: "/" + pluginName + "/accounts", Description: "Lists the independent Codex shared account pool and official quota snapshots."},
-				{Method: http.MethodGet, Path: "/" + pluginName + "/accounts/discover", Description: "Lists CPA Codex accounts available to add to the shared pool."},
-				{Method: http.MethodPut, Path: "/" + pluginName + "/accounts", Description: "Adds or updates one shared-pool Codex account."},
-				{Method: http.MethodPut, Path: "/" + pluginName + "/accounts/batch", Description: "Atomically adds or updates multiple shared-pool Codex accounts."},
-				{Method: http.MethodDelete, Path: "/" + pluginName + "/accounts", Description: "Removes one account from the shared pool."},
-				{Method: http.MethodPost, Path: "/" + pluginName + "/accounts/refresh", Description: "Schedules an official quota refresh without using the model proxy path."},
+				{Method: http.MethodGet, Path: "/" + pluginName + "/content-filter", Description: "Returns the RE2 content filter and its built-in/custom expressions."},
+				{Method: http.MethodPut, Path: "/" + pluginName + "/content-filter", Description: "Atomically enables, disables, or updates RE2 content filtering."},
+				{Method: http.MethodGet, Path: "/" + pluginName + "/forbidden-logs", Description: "Filters and pages dedicated content-expression interception logs."},
+				{Method: http.MethodDelete, Path: "/" + pluginName + "/forbidden-logs", Description: "Clears content-expression interception logs for one Key or all Keys without changing quota or other logs."},
+				{Method: http.MethodGet, Path: "/" + pluginName + "/models", Description: "Lists the CPA-synchronized available model catalog."},
+				{Method: http.MethodPut, Path: "/" + pluginName + "/models", Description: "Replaces the CPA-synchronized available model catalog."},
+				{Method: http.MethodGet, Path: "/" + pluginName + "/rates", Description: "Lists the operator-maintained per-model dollar rate card."},
+				{Method: http.MethodPut, Path: "/" + pluginName + "/rates", Description: "Atomically replaces the per-model input, cached-input, and output dollar rates."},
 			},
 			Resources: []resourceRoute{{
 				Path: "/panel",
 				// CPA's registration ABI does not include a locale or menu-i18n map.
 				// Use the Chinese product name requested for the current CPAMP menu;
 				// the panel itself still follows CPA's live Chinese/English locale.
-				Menu:        "Codex 拼车",
-				Description: "codex 拼车插件",
+				Menu:        pluginDisplayName,
+				Description: "CPA Key 额度、费率与用量管理",
 			}},
 		})
 	case pluginabi.MethodManagementHandle:
@@ -728,13 +561,8 @@ func configure(request []byte) error {
 			return err
 		}
 		runtime.engine = engine
-		runtime.syncer = newQuotaSynchronizer(engine)
-		// No managed admission may observe persisted account-pool rows until the
-		// file-backed CPA sources have been completely verified. This also makes
-		// a temporarily unreadable historical row fail closed during startup.
-		engine.RequireAccountSourceVerification()
-		runtime.syncer.RefreshAccountSourceConflict()
-		runtime.syncer.Start()
+		// CPA supplies scheduler candidates per request; terminal CPA usage
+		// callbacks are the only source for Token and dollar accounting.
 		engine.LogOperational("info", "plugin_started", "codex-carpool 已启动", "", "")
 		if engine.AnalysisReaderDegraded() {
 			engine.LogOperational("warn", "usage_analysis_reader_degraded", "年度用量分析已降级为共享 SQLite 连接；额度守卫与实际 Token 结算不受影响", "", "")
@@ -755,7 +583,7 @@ func pluginRegistration() registration {
 	return registration{
 		SchemaVersion: pluginabi.SchemaVersion,
 		Metadata: pluginapi.Metadata{
-			Name:             pluginName,
+			Name:             pluginDisplayName,
 			Version:          pluginVersion,
 			Author:           "CLIProxyAPI community",
 			GitHubRepository: pluginGitHubRepository,
@@ -777,7 +605,7 @@ func interceptRequestBeforeAuth(raw []byte) ([]byte, error) {
 	if model == "" {
 		model = strings.TrimSpace(request.Model)
 	}
-	captureID := engine.CaptureRequestContent(apiKeyFromHeaders(request.Headers), model, request.Body, nowUTC())
+	captureID := engine.CaptureRequestContent(apiKeyFromHeaders(request.Headers), model, request.Headers.Get("Content-Type"), request.Body, nowUTC())
 	if captureID == "" {
 		return okEnvelope(pluginapi.RequestInterceptResponse{})
 	}
@@ -796,16 +624,9 @@ func pickAuth(raw []byte) ([]byte, error) {
 	if engine == nil {
 		return errorEnvelope("quota_unavailable", localizedAdmissionMessage(language, "quota_unavailable", "codex-carpool is not initialized")), nil
 	}
-	if !isCodexRoute(request) {
-		return okEnvelope(pluginapi.SchedulerPickResponse{Handled: false})
-	}
 	candidates := make([]quota.SchedulerCandidate, 0, len(request.Candidates))
 	for _, candidate := range request.Candidates {
 		candidates = append(candidates, quota.SchedulerCandidate{AuthID: candidate.ID, Priority: candidate.Priority, Status: candidate.Status})
-	}
-	candidates = engine.ResolveSchedulerCandidates(candidates)
-	if syncer := currentSynchronizer(); syncer != nil {
-		syncer.Trigger(engine.StalePoolCandidates(candidates, nowUTC()))
 	}
 	admission := engine.AdmitCaptured(
 		apiKeyFromHeaders(request.Options.Headers),
@@ -818,12 +639,19 @@ func pickAuth(raw []byte) ([]byte, error) {
 		return okEnvelope(pluginapi.SchedulerPickResponse{Handled: false})
 	}
 	if !admission.Allowed {
-		return errorEnvelopeWithStatus(admission.Code, localizedAdmissionMessage(language, admission.Code, admission.Message), admissionStatusCode(admission.Code)), nil
+		message := localizedAdmissionMessage(language, admission.Code, admission.Message)
+		if admission.RetryAt != nil {
+			if language == "zh" {
+				message += " 冷却至 " + admission.RetryAt.In(time.Local).Format("2006-01-02 15:04:05")
+			} else {
+				message += " Retry after " + admission.RetryAt.UTC().Format(time.RFC3339)
+			}
+		}
+		return errorEnvelopeWithStatus(admission.Code, message, admissionStatusCode(admission.Code)), nil
 	}
-	// A managed Key is routed only to a snapshot-eligible internal ledger. CPA
-	// still receives its original candidate ID, and no OAuth credential is ever
-	// copied into the request path or returned to the client.
-	return okEnvelope(pluginapi.SchedulerPickResponse{Handled: true, AuthID: quota.CPAAuthIDForPoolAuthID(candidates, admission.AuthID)})
+	// A managed Key is routed to the candidate selected by CPA. No OAuth
+	// credential is copied into the request path or returned to the client.
+	return okEnvelope(pluginapi.SchedulerPickResponse{Handled: true, AuthID: admission.AuthID})
 }
 
 func handleUsage(raw []byte) ([]byte, error) {
@@ -831,47 +659,27 @@ func handleUsage(raw []byte) ([]byte, error) {
 	if err := json.Unmarshal(raw, &record); err != nil {
 		return nil, fmt.Errorf("decode usage record: %w", err)
 	}
-	if !strings.EqualFold(strings.TrimSpace(record.Provider), "codex") {
-		return okEnvelope(map[string]any{})
-	}
 	engine := currentEngine()
 	if engine != nil {
-		authID := engine.ResolvePoolAuthID(record.AuthID)
+		authID := strings.TrimSpace(record.AuthID)
 		engine.RecordUsage(quota.CompletedUsage{
-			APIKey:          record.APIKey,
-			AuthID:          authID,
-			Model:           record.Model,
-			RequestedAt:     record.RequestedAt,
-			Generate:        record.Generate,
-			Failed:          record.Failed,
-			FailureStatus:   record.Failure.StatusCode,
-			InputTokens:     record.Detail.InputTokens,
-			OutputTokens:    record.Detail.OutputTokens,
-			ReasoningTokens: record.Detail.ReasoningTokens,
-			TotalTokens:     record.Detail.TotalTokens,
+			APIKey:              record.APIKey,
+			AuthID:              authID,
+			Model:               record.Model,
+			RequestedAt:         record.RequestedAt,
+			Generate:            record.Generate,
+			Failed:              record.Failed,
+			FailureStatus:       record.Failure.StatusCode,
+			InputTokens:         record.Detail.InputTokens,
+			OutputTokens:        record.Detail.OutputTokens,
+			ReasoningTokens:     record.Detail.ReasoningTokens,
+			CachedTokens:        record.Detail.CachedTokens,
+			CacheReadTokens:     record.Detail.CacheReadTokens,
+			CacheCreationTokens: record.Detail.CacheCreationTokens,
+			TotalTokens:         record.Detail.TotalTokens,
 		})
-		if record.Failed && record.Failure.StatusCode == http.StatusTooManyRequests {
-			if syncer := currentSynchronizer(); syncer != nil {
-				if isOfficialQuotaExhaustion(record.Failure.Body) {
-					syncer.MarkRateLimited(authID, record.Failure.Body)
-				}
-				syncer.Trigger([]string{authID})
-			}
-		}
 	}
 	return okEnvelope(map[string]any{})
-}
-
-func isCodexRoute(request pluginapi.SchedulerPickRequest) bool {
-	if strings.EqualFold(strings.TrimSpace(request.Provider), "codex") {
-		return true
-	}
-	for _, provider := range request.Providers {
-		if strings.EqualFold(strings.TrimSpace(provider), "codex") {
-			return true
-		}
-	}
-	return false
 }
 
 func handleManagement(raw []byte) ([]byte, error) {
@@ -879,7 +687,6 @@ func handleManagement(raw []byte) ([]byte, error) {
 	if err := json.Unmarshal(raw, &request); err != nil {
 		return nil, fmt.Errorf("decode management request: %w", err)
 	}
-	language := managementLanguage(request)
 	fail := func(status int, cause error) ([]byte, error) {
 		return managementFailure(request, status, cause)
 	}
@@ -903,53 +710,25 @@ func handleManagement(raw []byte) ([]byte, error) {
 		if err := json.Unmarshal(request.Body, &payload); err != nil {
 			return fail(http.StatusBadRequest, errors.New("invalid JSON body"))
 		}
-		// Auth-dir changes and account saves share this boundary. Serializing
-		// them prevents a concurrent save from validating one directory and
-		// committing an entry after another request switches directories.
-		runtime.accountPoolMu.Lock()
 		setup, err := engine.ConfigureInstallation(payload.Settings)
-		runtime.accountPoolMu.Unlock()
 		if err != nil {
 			return fail(http.StatusBadRequest, err)
 		}
-		var readiness quotaSnapshotReadiness
-		if syncer := currentSynchronizer(); syncer != nil {
-			syncer.ClearCredentials()
-			syncer.RefreshAccountSourceConflict()
-			authIDs := make([]string, 0)
-			for _, account := range engine.AccountPool(nowUTC()) {
-				if account.Enabled {
-					authIDs = append(authIDs, account.AuthID)
-				}
-			}
-			if len(authIDs) > 0 {
-				refreshStartedAt := nowUTC()
-				syncer.TriggerNow(authIDs)
-				readiness = syncer.WaitForRefreshedUsableSnapshot(authIDs, refreshStartedAt, quotaInitialSnapshotWait)
-			}
-		}
 		engine.LogOperational("info", "installation_updated", "插件运行设置已更新", "", "")
-		if len(readiness.Ready) == 0 && (len(readiness.Pending) > 0 || len(readiness.Errors) > 0) {
-			engine.LogOperational("warn", "quota_sync_pending", "认证目录已更新，但尚未取得可用于路由的官方额度快照", "", "")
-			return managementJSON(http.StatusAccepted, map[string]any{"settings": setup.Settings, "status": "quota_sync_pending", "quota": localizedQuotaReadiness(language, readiness)})
-		}
-		return managementJSON(http.StatusOK, map[string]any{"settings": setup.Settings, "status": "ready", "quota": localizedQuotaReadiness(language, readiness)})
+		return managementJSON(http.StatusOK, map[string]any{"settings": setup.Settings, "status": "ready"})
 	case path == apiPrefix+"/summary" && method == http.MethodGet:
 		now := nowUTC()
 		summary := engine.Summary(now)
 		// Analytics is management-only: a read failure leaves Token cells unknown
-		// but must not hide the authoritative allocation and official pool status.
+		// but must not hide the authoritative Key dollar-window status.
 		if enriched, err := engine.SummaryWithActualTokens(now); err == nil {
 			summary = enriched
 		}
-		return managementJSON(http.StatusOK, localizedSummary(language, summary))
+		return managementJSON(http.StatusOK, summary)
 	case path == apiPrefix+"/keys" && method == http.MethodGet:
 		return managementJSON(http.StatusOK, map[string]any{"keys": engine.Policies()})
 	case path == apiPrefix+"/keys" && (method == http.MethodPost || method == http.MethodPut):
 		var payload policyRequest
-		if err := rejectRetiredPolicyFields(request.Body); err != nil {
-			return fail(http.StatusBadRequest, err)
-		}
 		if err := json.Unmarshal(request.Body, &payload); err != nil {
 			return fail(http.StatusBadRequest, errors.New("invalid JSON body"))
 		}
@@ -960,7 +739,7 @@ func handleManagement(raw []byte) ([]byte, error) {
 		if err != nil {
 			return fail(http.StatusBadRequest, err)
 		}
-		engine.LogOperational("info", "key_policy_saved", "Key 管理策略已保存", "", policy.ID)
+		engine.LogOperational("info", "key_policy_saved", "Key 额度设置已保存", "", policy.ID)
 		return managementJSON(http.StatusOK, map[string]any{"key": policy})
 	case path == apiPrefix+"/keys" && method == http.MethodDelete:
 		if err := engine.DeletePolicy(strings.TrimSpace(request.Query.Get("key_id"))); err != nil {
@@ -1010,6 +789,19 @@ func handleManagement(raw []byte) ([]byte, error) {
 			return fail(http.StatusBadRequest, err)
 		}
 		return managementJSON(http.StatusOK, analysis)
+	case path == apiPrefix+"/model-ranking" && method == http.MethodGet:
+		from, until, location, err := parseUsageAnalysisRange(request.Query.Get("from"), request.Query.Get("to"), request.Query.Get("timezone"), nowUTC())
+		if err != nil {
+			return fail(http.StatusBadRequest, err)
+		}
+		ranking, err := engine.ModelUsageRanking(from, until, location)
+		if err != nil {
+			if errors.Is(err, context.DeadlineExceeded) {
+				return fail(http.StatusServiceUnavailable, errors.New("usage analysis is temporarily unavailable"))
+			}
+			return fail(http.StatusBadRequest, err)
+		}
+		return managementJSON(http.StatusOK, ranking)
 	case path == apiPrefix+"/logs" && method == http.MethodGet:
 		pageSize := strings.TrimSpace(request.Query.Get("page_size"))
 		if pageSize == "" {
@@ -1028,12 +820,6 @@ func handleManagement(raw []byte) ([]byte, error) {
 			return fail(http.StatusBadRequest, err)
 		}
 		return managementJSON(http.StatusOK, map[string]string{"status": "ok"})
-	case path == apiPrefix+"/debug/quota" && method == http.MethodGet:
-		debug, err := engine.QuotaDebug(strings.TrimSpace(request.Query.Get("key_id")), nowUTC())
-		if err != nil {
-			return fail(http.StatusBadRequest, err)
-		}
-		return managementJSON(http.StatusOK, debug)
 	case path == apiPrefix+"/operation-logs" && method == http.MethodGet:
 		logs, err := engine.OperationalLogPage(strings.TrimSpace(request.Query.Get("level")), strings.TrimSpace(request.Query.Get("query")), parsePage(request.Query.Get("page")), parseLogPageSize(request.Query.Get("page_size")))
 		if err != nil {
@@ -1056,7 +842,7 @@ func handleManagement(raw []byte) ([]byte, error) {
 		if err != nil {
 			return fail(http.StatusBadRequest, err)
 		}
-		engine.LogOperational("info", "content_filter_updated", fmt.Sprintf("违禁词拦截已更新：启用=%t，词条=%d", settings.Enabled, len(settings.Terms)), "", "")
+		engine.LogOperational("info", "content_filter_updated", fmt.Sprintf("内容正则拦截已更新：启用=%t，表达式=%d", settings.Enabled, len(settings.Terms)), "", "")
 		return managementJSON(http.StatusOK, map[string]any{"settings": settings})
 	case path == apiPrefix+"/forbidden-logs" && method == http.MethodGet:
 		pageSize := strings.TrimSpace(request.Query.Get("page_size"))
@@ -1088,140 +874,21 @@ func handleManagement(raw []byte) ([]byte, error) {
 		if err := engine.ReplaceModels(payload.Models); err != nil {
 			return fail(http.StatusBadRequest, err)
 		}
-		engine.LogOperational("info", "model_catalog_synced", fmt.Sprintf("已同步 %d 个 Codex 模型", len(payload.Models)), "", "")
+		engine.LogOperational("info", "model_catalog_synced", fmt.Sprintf("已同步 %d 个 CPA 可用模型", len(payload.Models)), "", "")
 		return managementJSON(http.StatusOK, map[string]string{"status": "ok"})
-	case path == apiPrefix+"/accounts" && method == http.MethodGet:
-		return managementJSON(http.StatusOK, map[string]any{"accounts": localizedAccountPoolSnapshots(language, engine.AccountPool(nowUTC()))})
-	case path == apiPrefix+"/accounts/discover" && method == http.MethodGet:
-		accounts, err := discoverCodexAccounts()
-		if err != nil {
-			return fail(http.StatusBadGateway, err)
-		}
-		return managementJSON(http.StatusOK, map[string]any{"accounts": accounts})
-	case path == apiPrefix+"/accounts/batch" && method == http.MethodPut:
-		var payload accountsRequest
+	case path == apiPrefix+"/rates" && method == http.MethodGet:
+		return managementJSON(http.StatusOK, map[string]any{"rates": engine.ModelRates()})
+	case path == apiPrefix+"/rates" && method == http.MethodPut:
+		var payload ratesRequest
 		if err := json.Unmarshal(request.Body, &payload); err != nil {
 			return fail(http.StatusBadRequest, errors.New("invalid JSON body"))
 		}
-		// Validate the entire future pool and save it under one management lock so
-		// a batch cannot partially pass duplicate-account protection or capacity
-		// validation while another account save is in flight.
-		runtime.accountPoolMu.Lock()
-		if err := validateDistinctCodexAccountSources(engine, payload.Accounts); err != nil {
-			runtime.accountPoolMu.Unlock()
-			return fail(http.StatusBadRequest, err)
-		}
-		accounts, err := engine.UpsertAccountPoolEntries(payload.Accounts)
-		runtime.accountPoolMu.Unlock()
+		rates, err := engine.ReplaceModelRates(payload.Rates)
 		if err != nil {
 			return fail(http.StatusBadRequest, err)
 		}
-		var readiness quotaSnapshotReadiness
-		if syncer := currentSynchronizer(); syncer != nil {
-			syncer.RefreshAccountSourceConflict()
-			authIDs := make([]string, 0, len(accounts))
-			for _, account := range accounts {
-				if account.Enabled {
-					authIDs = append(authIDs, account.AuthID)
-				}
-			}
-			if len(authIDs) > 0 {
-				refreshStartedAt := nowUTC()
-				syncer.TriggerNow(authIDs)
-				// The saved pool is not reported as usable until a worker has written
-				// at least one local official snapshot. This closes the save→first
-				// model-request race without moving upstream I/O into CPA routing.
-				readiness = syncer.WaitForRefreshedUsableSnapshot(authIDs, refreshStartedAt, quotaInitialSnapshotWait)
-			}
-		}
-		engine.LogOperational("info", "account_pool_batch_saved", fmt.Sprintf("已批量保存 %d 个共享账号池配置", len(accounts)), "", "")
-		if len(readiness.Ready) == 0 && (len(readiness.Pending) > 0 || len(readiness.Errors) > 0) {
-			engine.LogOperational("warn", "quota_sync_pending", "账号池已保存，但尚未取得可用于路由的官方额度快照", "", "")
-			return managementJSON(http.StatusAccepted, map[string]any{"status": "quota_sync_pending", "accounts": accounts, "quota": localizedQuotaReadiness(language, readiness)})
-		}
-		return managementJSON(http.StatusOK, map[string]any{"status": "ready", "accounts": accounts, "quota": localizedQuotaReadiness(language, readiness)})
-	case path == apiPrefix+"/accounts" && method == http.MethodPut:
-		var payload accountRequest
-		if err := json.Unmarshal(request.Body, &payload); err != nil {
-			return fail(http.StatusBadRequest, errors.New("invalid JSON body"))
-		}
-		// Keep validation and the SQLite account-pool mutation atomic relative to
-		// another management save, otherwise two simultaneous alias saves could
-		// both validate before either one becomes visible.
-		runtime.accountPoolMu.Lock()
-		if err := validateDistinctCodexAccountSource(engine, payload.Account); err != nil {
-			runtime.accountPoolMu.Unlock()
-			return fail(http.StatusBadRequest, err)
-		}
-		account, err := engine.UpsertAccountPoolEntry(payload.Account)
-		runtime.accountPoolMu.Unlock()
-		if err != nil {
-			return fail(http.StatusBadRequest, err)
-		}
-		var readiness quotaSnapshotReadiness
-		if syncer := currentSynchronizer(); syncer != nil && account.Enabled {
-			syncer.RefreshAccountSourceConflict()
-			refreshStartedAt := nowUTC()
-			syncer.TriggerNow([]string{account.AuthID})
-			readiness = syncer.WaitForRefreshedUsableSnapshot([]string{account.AuthID}, refreshStartedAt, quotaInitialSnapshotWait)
-		} else if syncer := currentSynchronizer(); syncer != nil {
-			syncer.RefreshAccountSourceConflict()
-		}
-		engine.LogOperational("info", "account_pool_saved", "共享账号池配置已保存", account.AuthID, "")
-		if account.Enabled && len(readiness.Ready) == 0 && (len(readiness.Pending) > 0 || len(readiness.Errors) > 0) {
-			engine.LogOperational("warn", "quota_sync_pending", "账号已保存，但尚未取得可用于路由的官方额度快照", account.AuthID, "")
-			return managementJSON(http.StatusAccepted, map[string]any{"status": "quota_sync_pending", "account": account, "quota": localizedQuotaReadiness(language, readiness)})
-		}
-		return managementJSON(http.StatusOK, map[string]any{"status": "ready", "account": account, "quota": localizedQuotaReadiness(language, readiness)})
-	case path == apiPrefix+"/accounts" && method == http.MethodDelete:
-		authID := strings.TrimSpace(request.Query.Get("auth_id"))
-		runtime.accountPoolMu.Lock()
-		defer runtime.accountPoolMu.Unlock()
-		if err := engine.DeleteAccountPoolEntry(authID); err != nil {
-			return fail(http.StatusBadRequest, err)
-		}
-		if syncer := currentSynchronizer(); syncer != nil {
-			syncer.RefreshAccountSourceConflict()
-		}
-		engine.LogOperational("info", "account_pool_deleted", "账号已从共享池移除", authID, "")
-		return managementJSON(http.StatusOK, map[string]string{"status": "ok"})
-	case path == apiPrefix+"/accounts/refresh" && method == http.MethodPost:
-		syncer := currentSynchronizer()
-		if syncer == nil {
-			return fail(http.StatusServiceUnavailable, errors.New("official quota synchronizer is unavailable"))
-		}
-		authIDs := make([]string, 0)
-		if authID := strings.TrimSpace(request.Query.Get("auth_id")); authID != "" {
-			authIDs = append(authIDs, authID)
-		} else {
-			for _, account := range engine.AccountPool(nowUTC()) {
-				if account.Enabled {
-					authIDs = append(authIDs, account.AuthID)
-				}
-			}
-		}
-		refreshStartedAt := nowUTC()
-		refresh, retryAfter := syncer.RequestManualRefresh(authIDs)
-		if retryAfter > 0 {
-			return fail(http.StatusTooManyRequests, errors.New("quota refresh cooldown"))
-		}
-		if refresh.Scheduled == 0 {
-			return managementJSON(http.StatusConflict, map[string]any{
-				"error":   localizedManagementError(language, "quota_refresh_unavailable"),
-				"code":    "quota_refresh_unavailable",
-				"refresh": refresh,
-			})
-		}
-		if len(authIDs) == 1 {
-			engine.LogOperational("info", "quota_refresh_requested", "已请求刷新官方额度", authIDs[0], "")
-		} else {
-			engine.LogOperational("info", "quota_refresh_requested", "已请求刷新全部官方额度", "", "")
-		}
-		readiness := syncer.WaitForRefreshedUsableSnapshot(authIDs, refreshStartedAt, quotaInitialSnapshotWait)
-		if len(readiness.Ready) == 0 && (len(readiness.Pending) > 0 || len(readiness.Errors) > 0) {
-			return managementJSON(http.StatusAccepted, map[string]any{"status": "quota_sync_pending", "refresh": refresh, "quota": localizedQuotaReadiness(language, readiness)})
-		}
-		return managementJSON(http.StatusOK, map[string]any{"status": "ready", "refresh": refresh, "quota": localizedQuotaReadiness(language, readiness)})
+		engine.LogOperational("info", "model_rates_saved", fmt.Sprintf("模型费率已更新：%d 个模型", len(rates)), "", "")
+		return managementJSON(http.StatusOK, map[string]any{"rates": rates})
 	default:
 		return fail(http.StatusNotFound, errors.New("plugin route not found"))
 	}
@@ -1231,12 +898,6 @@ func currentEngine() *quota.Engine {
 	runtime.mu.RLock()
 	defer runtime.mu.RUnlock()
 	return runtime.engine
-}
-
-func currentSynchronizer() *quotaSynchronizer {
-	runtime.mu.RLock()
-	defer runtime.mu.RUnlock()
-	return runtime.syncer
 }
 
 func apiKeyFromHeaders(headers map[string][]string) string {
@@ -1364,10 +1025,10 @@ func admissionStatusCode(code string) int {
 	switch code {
 	case "model_not_allowed", "access_schedule_closed", "content_forbidden":
 		return http.StatusForbidden
-	case "quota_pool_unconfigured", "quota_snapshot_unavailable", "quota_candidate_mismatch", "quota_account_unavailable", "quota_scheduler_candidates_required", "quota_unavailable", "quota_account_source_conflict", "quota_persistence_unavailable":
+	case "quota_scheduler_candidates_required", "quota_unavailable", "quota_persistence_unavailable", "model_rate_not_configured":
 		// SQLite/accounting recovery is a temporary plugin outage, never a
 		// downstream Key quota exhaustion. Reserve 429 exclusively for a real
-		// allocation or official-account limit so callers retry it correctly.
+		// configured dollar-budget exhaustion so callers retry it correctly.
 		return http.StatusServiceUnavailable
 	default:
 		return http.StatusTooManyRequests
