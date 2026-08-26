@@ -204,21 +204,30 @@ func (engine *Engine) DecisionLogs(keyID string, limit int) ([]DecisionLog, erro
 }
 
 func (engine *Engine) DecisionLogPage(keyID, decision, search string, page, pageSize int) (DecisionLogPage, error) {
+	return engine.DecisionLogPageInRange(keyID, decision, search, time.Time{}, time.Time{}, page, pageSize)
+}
+
+// DecisionLogPageInRange applies optional inclusive UTC boundaries without
+// changing the unfiltered log-page contract used by existing callers.
+func (engine *Engine) DecisionLogPageInRange(keyID, decision, search string, from, to time.Time, page, pageSize int) (DecisionLogPage, error) {
 	if engine == nil {
 		return DecisionLogPage{}, fmt.Errorf("codex-carpool is not initialized")
+	}
+	if !from.IsZero() && !to.IsZero() && from.After(to) {
+		return DecisionLogPage{}, fmt.Errorf("log end time must not be before start time")
 	}
 	page, pageSize = normalizePage(page, pageSize)
 	if err := engine.flushPending(); err != nil {
 		return DecisionLogPage{}, err
 	}
-	items, total, err := engine.store.ListDecisionLogsPage(keyID, decision, search, pageSize, (page-1)*pageSize)
+	items, total, err := engine.store.ListDecisionLogsPageInRange(keyID, decision, search, from, to, pageSize, (page-1)*pageSize)
 	if err != nil {
 		return DecisionLogPage{}, err
 	}
 	totalPages := pageCount(total, pageSize)
 	if totalPages > 0 && page > totalPages {
 		page = totalPages
-		items, total, err = engine.store.ListDecisionLogsPage(keyID, decision, search, pageSize, (page-1)*pageSize)
+		items, total, err = engine.store.ListDecisionLogsPageInRange(keyID, decision, search, from, to, pageSize, (page-1)*pageSize)
 		if err != nil {
 			return DecisionLogPage{}, err
 		}

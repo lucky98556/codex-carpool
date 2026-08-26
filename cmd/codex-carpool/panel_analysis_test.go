@@ -214,8 +214,11 @@ func TestPanelKeepsSearchAndOperationColumnsHostSafe(t *testing.T) {
 		`.cc-panel label.search>.search-clear[hidden]{display:none!important}`,
 		`.cc-panel .mini-trend .mini-dot{fill:var(--cc-primary)`,
 		`.cc-panel .mini-trend-empty{display:grid!important`,
-		`.cc-panel .usage-overview-grid{display:grid!important;grid-template-columns:minmax(0,1fr) 340px!important;align-items:stretch!important`,
+		`.cc-panel .usage-overview-grid{--usage-overview-height:382px;display:grid!important;grid-template-columns:minmax(0,1fr) 340px!important;align-items:stretch!important`,
 		`.cc-panel .usage-overview-grid>.key-table-wrap{align-self:stretch!important`,
+		`overflow:auto!important;overscroll-behavior:contain!important;scrollbar-gutter:stable!important`,
+		`.cc-panel .key-table-caption{position:sticky!important;top:0!important;left:0!important`,
+		`.cc-panel .key-table thead th{position:sticky!important;top:49px!important`,
 		`.cc-panel .key-table th:nth-child(1){width:14%}`,
 		`.cc-panel .key-table{min-width:800px;table-layout:fixed}`,
 		`.cc-panel .key-table th:nth-child(4){width:19%}`,
@@ -227,10 +230,13 @@ func TestPanelKeepsSearchAndOperationColumnsHostSafe(t *testing.T) {
 		`.cc-panel .key-table .pill{white-space:nowrap!important}`,
 		`.cc-panel .mini-trend{display:block;width:100%;max-width:132px;height:34px}`,
 		`.cc-panel .daily-model-card{isolation:isolate!important;align-self:stretch!important;display:flex!important`,
-		`.cc-panel .daily-model-card{width:100%!important;height:auto!important}`,
+		`.cc-panel .daily-model-ranking{display:flex!important;flex:1 1 auto!important;flex-direction:column!important`,
+		`overflow-x:hidden!important;overflow-y:auto!important`,
+		`.cc-panel .usage-overview-grid>.key-table-wrap,.cc-panel .daily-model-card{width:100%!important;height:var(--usage-overview-height)!important}`,
 		`id="daily-model-ranking" class="daily-model-ranking"`,
 		`id="daily-model-total" class="daily-model-total"`,
-		`function renderDailyModelRanking()`,
+		`function renderDailyModelRanking()`, `items=snapshot.models||[]`,
+		`uiText(' 个',' models')`, `今日有用量的模型数量：`,
 		`api('/model-ranking?'+params)`,
 		`uiText('今日合计','Today total')`,
 		`<td colspan="7" class="empty">'+uiText('暂无已添加 Key`,
@@ -256,8 +262,12 @@ func TestPanelKeepsSearchAndOperationColumnsHostSafe(t *testing.T) {
 		`id="key-log-dialog"`, `id="key-logs"`, `data-key-log="`,
 		`function renderKeyLogs()`, `async function loadKeyLogs(reset=false)`, `function openKeyLogs(keyID)`,
 		`key_id:state.keyLogKeyID`, `page_size:'10'`,
+		`id="key-log-from"`, `id="key-log-to"`, `id="key-log-search"`, `id="key-log-query"`, `id="key-log-filter-clear"`,
+		`data-clear-search="key-log-search" data-clear-query="key-log-query"`, `params.from=from.toISOString()`, `params.to=to.toISOString()`, `params.query=query`,
 		`id="key-log-prev"`, `id="key-log-page-number"`, `id="key-log-next"`,
-		`#key-log-dialog>.key-log-form{display:flex!important`,
+		`#key-log-dialog>.key-log-form{display:grid!important;grid-template-rows:auto minmax(0,1fr)!important`,
+		`#key-log-dialog .key-log-filters{display:grid!important`,
+		`#key-log-dialog .key-log-table thead th{position:sticky!important;top:0!important`,
 		`#key-log-dialog .key-log-table{min-width:1120px!important;table-layout:fixed!important`,
 		`#key-log-dialog>footer{justify-content:space-between!important`,
 		`['Key 请求日志','Key request logs']`,
@@ -278,6 +288,9 @@ func TestPanelKeepsSearchAndOperationColumnsHostSafe(t *testing.T) {
 		if !strings.Contains(page, marker) {
 			t.Fatalf("panel missing host-isolation marker %q", marker)
 		}
+	}
+	if strings.Contains(page, `(snapshot.models||[]).slice(0,5)`) {
+		t.Fatal("daily model ranking must render every returned model and use its scroll container")
 	}
 	for _, retired := range []string{`<th>最近模型</th>`, `['最近模型','Latest model']`, `keyLatestModels`, `<td colspan="8" class="empty">'+uiText('暂无已添加 Key`} {
 		if strings.Contains(page, retired) {
@@ -306,8 +319,8 @@ func TestPanelKeepsSearchAndOperationColumnsHostSafe(t *testing.T) {
 	if strings.Count(page, `清除日志`) < 3 || strings.Contains(page, `>清除</button>`) {
 		t.Fatalf("all three log tabs must use the explicit clear-log copy, got %d", strings.Count(page, `清除日志`))
 	}
-	if count := strings.Count(page, `class="search-clear"`); count != 4 {
-		t.Fatalf("dashboard searches must expose four stable inline clear controls, got %d", count)
+	if count := strings.Count(page, `class="search-clear"`); count != 5 {
+		t.Fatalf("dashboard and Key-log searches must expose five stable inline clear controls, got %d", count)
 	}
 	for _, retired := range []string{`.slice(0,30)`, `latestModel=(state.logs||[]).find`, `api('/logs?key_id='+encodeURIComponent(state.selected),{method:'DELETE'})`, `key_id:state.selected,page:String(state.decisionPage.page`} {
 		if strings.Contains(page, retired) {

@@ -13,6 +13,25 @@ import (
 	"github.com/router-for-me/CLIProxyAPI/v7/sdk/pluginapi"
 )
 
+func TestParseLogTimeRangeUsesRFC3339AndRejectsReversedRange(t *testing.T) {
+	from, to, err := parseLogTimeRange("2026-08-25T08:30:00+08:00", "2026-08-25T09:45:00+08:00")
+	if err != nil {
+		t.Fatalf("parseLogTimeRange() error = %v", err)
+	}
+	if got, want := from.Format(time.RFC3339), "2026-08-25T00:30:00Z"; got != want {
+		t.Fatalf("from = %q, want %q", got, want)
+	}
+	if got, want := to.Format(time.RFC3339), "2026-08-25T01:45:00Z"; got != want {
+		t.Fatalf("to = %q, want %q", got, want)
+	}
+	if _, _, err := parseLogTimeRange("2026-08-25T10:00:00Z", "2026-08-25T09:00:00Z"); err == nil {
+		t.Fatal("reversed log time range error = nil")
+	}
+	if _, _, err := parseLogTimeRange("2026-08-25 10:00", ""); err == nil {
+		t.Fatal("non-RFC3339 log time error = nil")
+	}
+}
+
 func TestManagementLanguageFollowsForwardedCPAHeader(t *testing.T) {
 	chinese := pluginapi.ManagementRequest{Headers: http.Header{"Accept-Language": []string{"zh-CN,zh;q=0.9"}}}
 	if got := managementLanguage(chinese); got != "zh" {

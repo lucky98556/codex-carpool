@@ -206,6 +206,31 @@ func TestClearDecisionLogsWithoutKeyClearsGlobalLogView(t *testing.T) {
 	}
 }
 
+func TestDecisionLogPageFiltersCurrentKeyByTimeAndKeyword(t *testing.T) {
+	engine := newTestEngine(t, KeyPolicy{ID: "managed", Name: "Managed", Enabled: true})
+	defer func() { _ = engine.Close() }()
+	base := time.Date(2026, time.August, 25, 8, 0, 0, 0, time.UTC)
+	logs := []DecisionLog{
+		{KeyID: "managed", Model: "gpt-5", RequestContent: "outside range needle", RequestedAt: base, Decision: "completed"},
+		{KeyID: "managed", Model: "gpt-5.6", RequestContent: "inside range needle", RequestedAt: base.Add(time.Hour), Decision: "completed"},
+		{KeyID: "managed", Model: "gpt-image-2", RequestContent: "inside range other", RequestedAt: base.Add(2 * time.Hour), Decision: "completed"},
+		{KeyID: "other", Model: "gpt-5.6", RequestContent: "inside range needle", RequestedAt: base.Add(time.Hour), Decision: "completed"},
+	}
+	if err := engine.store.FlushUsageAndLogs(nil, logs); err != nil {
+		t.Fatalf("FlushUsageAndLogs() error = %v", err)
+	}
+	page, err := engine.DecisionLogPageInRange("managed", "", "needle", base.Add(30*time.Minute), base.Add(90*time.Minute), 1, 10)
+	if err != nil {
+		t.Fatalf("DecisionLogPageInRange() error = %v", err)
+	}
+	if page.Total != 1 || len(page.Logs) != 1 || page.Logs[0].RequestContent != "inside range needle" {
+		t.Fatalf("filtered decision log page = %+v", page)
+	}
+	if _, err := engine.DecisionLogPageInRange("managed", "", "", base.Add(time.Hour), base, 1, 10); err == nil {
+		t.Fatal("reversed decision log range error = nil")
+	}
+}
+
 func TestUnlimitedDollarWindowStillReportsSettledSpend(t *testing.T) {
 	now := time.Date(2026, time.August, 4, 12, 0, 0, 0, time.UTC)
 	state := newKeyMeterState([]meterEvent{{At: now.Add(-time.Hour), Units: 1_250_000}}, now)

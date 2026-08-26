@@ -11,6 +11,10 @@ func (store *Store) ListDecisionLogs(keyID string, limit int) ([]DecisionLog, er
 }
 
 func (store *Store) ListDecisionLogsPage(keyID, decision, search string, limit, offset int) ([]DecisionLog, int, error) {
+	return store.ListDecisionLogsPageInRange(keyID, decision, search, time.Time{}, time.Time{}, limit, offset)
+}
+
+func (store *Store) ListDecisionLogsPageInRange(keyID, decision, search string, from, to time.Time, limit, offset int) ([]DecisionLog, int, error) {
 	keyID, decision, search = strings.TrimSpace(keyID), strings.ToLower(strings.TrimSpace(decision)), strings.TrimSpace(search)
 	if limit <= 0 || limit > 100 {
 		limit = 20
@@ -34,22 +38,30 @@ func (store *Store) ListDecisionLogsPage(keyID, decision, search string, limit, 
 		args = append(args, decision)
 	}
 	if search != "" {
-		where = append(where, "(l.model LIKE ? OR l.reason LIKE ? OR l.auth_id LIKE ? OR l.request_content LIKE ? OR p.name LIKE ? OR p.key_suffix LIKE ?)")
+		where = append(where, "(l.model LIKE ? OR l.decision LIKE ? OR l.reason LIKE ? OR l.auth_id LIKE ? OR l.request_content LIKE ? OR p.name LIKE ? OR p.key_suffix LIKE ?)")
 		pattern := "%" + search + "%"
-		args = append(args, pattern, pattern, pattern, pattern, pattern, pattern)
+		args = append(args, pattern, pattern, pattern, pattern, pattern, pattern, pattern)
+	}
+	if !from.IsZero() {
+		where = append(where, "l.requested_at>=?")
+		args = append(args, from.UTC().UnixMilli())
+	}
+	if !to.IsZero() {
+		where = append(where, "l.requested_at<=?")
+		args = append(args, to.UTC().UnixMilli())
 	}
 	clause := strings.Join(where, " AND ")
 	store.mu.Lock()
 	defer store.mu.Unlock()
 	var total int
-	from := ` FROM request_logs l LEFT JOIN key_policies p ON p.key_id=l.key_id WHERE `
-	if err := store.db.QueryRow(`SELECT COUNT(*)`+from+clause, args...).Scan(&total); err != nil {
+	queryFrom := ` FROM request_logs l LEFT JOIN key_policies p ON p.key_id=l.key_id WHERE `
+	if err := store.db.QueryRow(`SELECT COUNT(*)`+queryFrom+clause, args...).Scan(&total); err != nil {
 		return nil, 0, err
 	}
 	queryArgs := append(append([]any(nil), args...), limit, offset)
 	rows, err := store.db.Query(`SELECT l.id,l.key_id,l.key_suffix,l.auth_id,l.model,l.request_content,l.matched_term,l.matched_category,l.requested_at,l.decision,l.status_code,l.reason,
 l.units,l.input_tokens,l.cached_tokens,l.output_tokens,l.input_cost_micros,l.cached_cost_micros,l.output_cost_micros,l.cost_micros`+
-		from+clause+` ORDER BY l.requested_at DESC,l.id DESC LIMIT ? OFFSET ?`, queryArgs...)
+		queryFrom+clause+` ORDER BY l.requested_at DESC,l.id DESC LIMIT ? OFFSET ?`, queryArgs...)
 	if err != nil {
 		return nil, 0, err
 	}

@@ -812,7 +812,11 @@ func handleManagement(raw []byte) ([]byte, error) {
 			// clients while the built-in panel uses explicit pagination.
 			pageSize = request.Query.Get("limit")
 		}
-		logs, err := engine.DecisionLogPage(strings.TrimSpace(request.Query.Get("key_id")), strings.TrimSpace(request.Query.Get("decision")), strings.TrimSpace(request.Query.Get("query")), parsePage(request.Query.Get("page")), parseLogPageSize(pageSize))
+		from, to, err := parseLogTimeRange(request.Query.Get("from"), request.Query.Get("to"))
+		if err != nil {
+			return fail(http.StatusBadRequest, err)
+		}
+		logs, err := engine.DecisionLogPageInRange(strings.TrimSpace(request.Query.Get("key_id")), strings.TrimSpace(request.Query.Get("decision")), strings.TrimSpace(request.Query.Get("query")), from, to, parsePage(request.Query.Get("page")), parseLogPageSize(pageSize))
 		if err != nil {
 			return fail(http.StatusBadRequest, err)
 		}
@@ -958,6 +962,32 @@ func parsePage(raw string) int {
 		return 1
 	}
 	return page
+}
+
+func parseLogTimeRange(rawFrom, rawTo string) (time.Time, time.Time, error) {
+	parse := func(raw, name string) (time.Time, error) {
+		raw = strings.TrimSpace(raw)
+		if raw == "" {
+			return time.Time{}, nil
+		}
+		value, err := time.Parse(time.RFC3339, raw)
+		if err != nil {
+			return time.Time{}, fmt.Errorf("log %s time must use RFC3339", name)
+		}
+		return value.UTC(), nil
+	}
+	from, err := parse(rawFrom, "start")
+	if err != nil {
+		return time.Time{}, time.Time{}, err
+	}
+	to, err := parse(rawTo, "end")
+	if err != nil {
+		return time.Time{}, time.Time{}, err
+	}
+	if !from.IsZero() && !to.IsZero() && from.After(to) {
+		return time.Time{}, time.Time{}, fmt.Errorf("log end time must not be before start time")
+	}
+	return from, to, nil
 }
 
 // parseUsageAnalysisRange accepts inclusive local dates and turns them into a
