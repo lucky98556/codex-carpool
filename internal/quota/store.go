@@ -30,6 +30,7 @@ var openUsageAnalysisReader = sql.Open
 // Store contains only the current Key dollar-meter schema.
 type Store struct {
 	db                     *sql.DB
+	databasePath           string
 	analysisDB             *sql.DB
 	analysisReaderDSN      string
 	analysisReaderDegraded bool
@@ -59,7 +60,7 @@ func OpenStore(path string) (*Store, error) {
 	}
 	db.SetMaxOpenConns(1)
 	db.SetMaxIdleConns(1)
-	store := &Store{db: db, lock: lock}
+	store := &Store{db: db, databasePath: canonical, lock: lock}
 	if err := store.migrate(); err != nil {
 		_ = db.Close()
 		_ = lock.release()
@@ -245,6 +246,7 @@ CREATE TABLE IF NOT EXISTS pending_request_markers (
   rate_input_micros INTEGER NOT NULL DEFAULT 0,
   rate_cached_micros INTEGER NOT NULL DEFAULT 0,
   rate_output_micros INTEGER NOT NULL DEFAULT 0,
+  rate_profile_json TEXT NOT NULL DEFAULT '',
   PRIMARY KEY(key_id, auth_id, model, requested_at)
 );
 CREATE TABLE IF NOT EXISTS request_logs (
@@ -292,6 +294,7 @@ CREATE TABLE IF NOT EXISTS model_rates (
   input_micros_per_million INTEGER NOT NULL DEFAULT 0,
   cached_micros_per_million INTEGER NOT NULL DEFAULT 0,
   output_micros_per_million INTEGER NOT NULL DEFAULT 0,
+  profile_json TEXT NOT NULL DEFAULT '',
   updated_at INTEGER NOT NULL
 );
 CREATE TABLE IF NOT EXISTS content_filter_settings (
@@ -313,8 +316,49 @@ CREATE INDEX IF NOT EXISTS idx_filter_normalized ON content_filter_terms(normali
 `); err != nil {
 		return fmt.Errorf("create current quota schema: %w", err)
 	}
+	// Additive columns keep an existing installation usable while the complete
+	// rate profile moves beyond the former single cached-input price.
+	for _, column := range []struct{ table, name, definition string }{
+		{"model_rates", "profile_json", "TEXT NOT NULL DEFAULT ''"},
+		{"pending_request_markers", "rate_profile_json", "TEXT NOT NULL DEFAULT ''"},
+	} {
+		if err := ensureSQLiteColumn(store.db, column.table, column.name, column.definition); err != nil {
+			return err
+		}
+	}
 	if err := store.seedContentFilterLocked(); err != nil {
 		return err
+	}
+	return nil
+}
+
+func ensureSQLiteColumn(db *sql.DB, table, column, definition string) error {
+	rows, err := db.Query(`PRAGMA table_info(` + table + `)`)
+	if err != nil {
+		return fmt.Errorf("inspect %s schema: %w", table, err)
+	}
+	found := false
+	for rows.Next() {
+		var cid int
+		var name, kind string
+		var notNull, primaryKey int
+		var defaultValue any
+		if err := rows.Scan(&cid, &name, &kind, &notNull, &defaultValue, &primaryKey); err != nil {
+			_ = rows.Close()
+			return fmt.Errorf("inspect %s columns: %w", table, err)
+		}
+		if name == column {
+			found = true
+		}
+	}
+	if err := rows.Close(); err != nil {
+		return err
+	}
+	if found {
+		return nil
+	}
+	if _, err := db.Exec(`ALTER TABLE ` + table + ` ADD COLUMN ` + column + ` ` + definition); err != nil {
+		return fmt.Errorf("add %s.%s: %w", table, column, err)
 	}
 	return nil
 }

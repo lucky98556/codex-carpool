@@ -211,11 +211,17 @@ html,body{margin:0;min-height:100%;background:var(--cc-page-bg);color:var(--cc-i
 .cc-panel .analysis-footnote strong{color:var(--cc-ink)}
 .cc-panel .logs{padding:18px}
 .cc-panel .logs-head{display:flex;align-items:flex-start;justify-content:space-between;gap:16px;margin-bottom:12px}
+.cc-panel .logs-actions{display:grid;justify-items:end;gap:9px;min-width:0}
 .cc-panel .tabs{display:flex;gap:6px;margin-top:10px}
 .cc-panel .tab{min-height:32px;border-radius:999px}
 .cc-panel .tab.active{border-color:var(--cc-primary);background:var(--cc-primary-soft);color:var(--cc-primary-strong)}
 .cc-panel .log-tools{display:flex;align-items:center;justify-content:flex-end;flex-wrap:wrap;gap:8px}
 .cc-panel .log-tools[hidden],.cc-panel .log-view[hidden]{display:none!important}
+.cc-panel .log-storage-summary{display:flex!important;align-items:center!important;justify-content:flex-end!important;flex-wrap:wrap!important;gap:6px 12px!important;max-width:100%!important;color:var(--cc-muted)!important;font-size:11px!important;line-height:1.35!important}
+.cc-panel .log-storage-summary>span{display:inline-flex!important;align-items:baseline!important;gap:4px!important;white-space:nowrap!important}
+.cc-panel .log-storage-summary small{color:var(--cc-muted)!important;font:inherit!important}
+.cc-panel .log-storage-summary strong{color:var(--cc-ink)!important;font-size:11px!important;font-variant-numeric:tabular-nums!important}
+.cc-panel .log-storage-summary em{padding-left:10px!important;border-left:1px solid var(--cc-line)!important;color:var(--cc-primary-strong)!important;font-style:normal!important;white-space:nowrap!important}
 .cc-panel .log-table{width:100%!important;table-layout:fixed!important}
 .cc-panel .log-table th,.cc-panel .log-table td{min-width:0!important;overflow:hidden!important;text-overflow:ellipsis!important;white-space:nowrap!important}
 .cc-panel .decision-log-table{min-width:1678px!important}
@@ -268,6 +274,7 @@ html,body{margin:0;min-height:100%;background:var(--cc-page-bg);color:var(--cc-i
 .cc-panel #toast-region>.ok{border-color:color-mix(in srgb,var(--cc-primary) 45%,var(--cc-line))!important}
 .cc-panel #toast-region>.error{border-color:color-mix(in srgb,var(--cc-danger) 45%,var(--cc-line))!important}
 #policy-dialog,#rate-card-dialog,#log-detail-dialog,#key-log-dialog,#content-filter-dialog{box-sizing:border-box!important;width:min(860px,calc(100vw - 40px))!important;max-height:calc(100vh - 40px)!important;margin:auto!important;padding:0!important;overflow:hidden!important;border:1px solid var(--cc-line)!important;border-radius:15px!important;background:var(--cc-card)!important;color:var(--cc-ink)!important;box-shadow:0 24px 80px rgba(8,39,71,.24)!important}
+#rate-card-dialog{width:min(1120px,calc(100vw - 40px))!important}
 #policy-dialog[open],#rate-card-dialog[open],#log-detail-dialog[open],#key-log-dialog[open],#content-filter-dialog[open]{display:flex!important;flex-direction:column!important}
 #policy-dialog::backdrop,#rate-card-dialog::backdrop,#log-detail-dialog::backdrop,#key-log-dialog::backdrop,#content-filter-dialog::backdrop{background:rgba(8,24,42,.42)!important;backdrop-filter:blur(2px)!important}
 #policy-dialog>header,#rate-card-dialog>header,#log-detail-dialog>header,#key-log-dialog>header,#content-filter-dialog>header{display:flex!important;flex:0 0 auto!important;align-items:center!important;justify-content:space-between!important;gap:12px!important;padding:16px 18px!important;border-bottom:1px solid var(--cc-line)!important;background:var(--cc-card)!important;color:var(--cc-ink)!important}
@@ -317,22 +324,35 @@ html,body{margin:0;min-height:100%;background:var(--cc-page-bg);color:var(--cc-i
 #policy-dialog .dialog-message,#rate-card-dialog .dialog-message,#content-filter-dialog .dialog-message{margin:0 18px 14px!important;padding:10px 12px!important;border:1px solid color-mix(in srgb,var(--cc-danger) 35%,var(--cc-line))!important;border-radius:10px!important;background:color-mix(in srgb,var(--cc-danger) 8%,var(--cc-card))!important;color:var(--cc-danger)!important;font-size:13px!important}
 #policy-dialog .dialog-message.ok,#rate-card-dialog .dialog-message.ok,#content-filter-dialog .dialog-message.ok{border-color:color-mix(in srgb,var(--cc-primary) 35%,var(--cc-line))!important;background:color-mix(in srgb,var(--cc-primary) 8%,var(--cc-card))!important;color:var(--cc-primary-strong)!important}
 #rate-card-dialog>.rate-card-form{display:flex!important;flex-direction:column!important;min-height:0!important;overflow:hidden!important}
-#rate-card-dialog .rate-card-form>.hint,#rate-card-dialog .rate-card-tools,#rate-card-dialog .rate-card-head,#rate-card-dialog .rate-card-add{flex:0 0 auto!important}
-#rate-card-dialog .rate-card-scroll{flex:1 1 auto!important;min-height:0!important;margin-top:4px!important;padding:0 4px 4px 0!important;overflow-y:auto!important;overflow-x:hidden!important;overscroll-behavior:contain!important;scrollbar-gutter:stable!important}
-#rate-card-dialog .rate-card-head,#rate-card-dialog .rate-card-row{display:grid!important;grid-template-columns:minmax(220px,1fr) 120px 120px 120px 90px!important;gap:8px!important;align-items:center!important}
+#rate-card-dialog .rate-card-form>.hint,#rate-card-dialog .rate-sync-bar,#rate-card-dialog .rate-card-tools,#rate-card-dialog .rate-card-add{flex:0 0 auto!important}
+#rate-card-dialog .rate-card-table{display:flex!important;flex:1 1 auto!important;min-height:0!important;flex-direction:column!important;margin-top:12px!important;overflow-x:auto!important;overflow-y:hidden!important;overscroll-behavior:contain!important;scrollbar-gutter:stable!important}
+#rate-card-dialog .rate-card-scroll{flex:1 1 auto!important;min-width:1010px!important;min-height:0!important;padding:0 4px 4px 0!important;overflow-y:auto!important;overflow-x:visible!important;overscroll-behavior:contain!important;scrollbar-gutter:stable!important}
+#rate-card-dialog .rate-card-head,#rate-card-dialog .rate-card-row{display:grid!important;min-width:1010px!important;grid-template-columns:minmax(210px,1fr) repeat(5,112px) 92px!important;gap:8px!important;align-items:center!important}
+#rate-card-dialog .rate-sync-bar{display:flex!important;align-items:center!important;justify-content:space-between!important;gap:16px!important;padding:12px 14px!important;border:1px solid var(--cc-line)!important;border-radius:11px!important;background:color-mix(in srgb,var(--cc-card) 92%,var(--cc-primary-soft))!important}
+#rate-card-dialog .rate-sync-bar>div{display:grid!important;gap:4px!important;min-width:0!important}
+#rate-card-dialog .rate-sync-bar strong{color:var(--cc-ink)!important;font-size:13px!important}
+#rate-card-dialog .rate-sync-bar small{overflow:hidden!important;color:var(--cc-muted)!important;font-size:12px!important;text-overflow:ellipsis!important;white-space:nowrap!important}
+#rate-card-dialog #rate-sync-toggle{border-color:transparent!important;background:transparent!important;padding:0!important}
+#rate-card-dialog .rate-sync-track{position:relative!important;display:inline-block!important;width:38px!important;height:22px!important;border-radius:999px!important;background:var(--cc-line-strong)!important;transition:background .16s ease!important}
+#rate-card-dialog .rate-sync-track>span{position:absolute!important;top:3px!important;left:3px!important;width:16px!important;height:16px!important;border-radius:50%!important;background:#fff!important;box-shadow:0 1px 3px rgba(8,39,71,.24)!important;transition:transform .16s ease!important}
+#rate-card-dialog #rate-sync-toggle[aria-checked="true"] .rate-sync-track{background:var(--cc-primary)!important}
+#rate-card-dialog #rate-sync-toggle[aria-checked="true"] .rate-sync-track>span{transform:translateX(16px)!important}
 #rate-card-dialog .rate-card-tools{display:grid!important;grid-template-columns:minmax(0,1fr) 150px!important;gap:8px!important;margin-top:12px!important}
 #rate-card-dialog label.rate-card-search{position:relative!important;isolation:isolate!important;display:block!important;width:100%!important;height:38px!important;margin:0!important;padding:0!important;overflow:hidden!important;border:1px solid var(--cc-line-strong)!important;border-radius:9px!important;background:var(--cc-card)!important;color:var(--cc-muted)!important}
 #rate-card-dialog .rate-card-search>.cc-icon{position:absolute!important;top:50%!important;left:11px!important;z-index:1!important;width:16px!important;height:16px!important;margin:0!important;transform:translateY(-50%)!important;pointer-events:none!important}
 #rate-card-dialog .rate-card-search>input{position:static!important;display:block!important;width:100%!important;min-width:0!important;height:38px!important;min-height:38px!important;margin:0!important;padding:0 10px 0 36px!important;border:0!important;box-shadow:none!important;background:transparent!important;color:var(--cc-ink)!important;text-indent:0!important;transform:none!important}
 #rate-card-dialog .rate-card-tools>select{display:block!important;width:100%!important;min-width:0!important;height:38px!important;min-height:38px!important;margin:0!important;padding:0 30px 0 10px!important;border:1px solid var(--cc-line-strong)!important;border-radius:9px!important;background:var(--cc-card)!important;color:var(--cc-ink)!important}
-#rate-card-dialog .rate-card-head{margin-top:12px!important;padding-right:12px!important;color:var(--cc-muted)!important;font-size:12px!important}
+#rate-card-dialog .rate-card-head{flex:0 0 auto!important;padding:0 12px 8px 10px!important;color:var(--cc-muted)!important;font-size:12px!important}
 #rate-card-dialog .rate-card-row{margin-top:8px!important;padding:10px!important;border:1px solid var(--cc-line)!important;border-radius:10px!important;background:color-mix(in srgb,var(--cc-card) 96%,var(--cc-primary-soft))!important}
 #rate-card-dialog .rate-card-row[hidden],#rate-card-dialog .rate-card-filter-empty[hidden]{display:none!important}
 #rate-card-dialog .rate-card-filter-empty{margin-top:10px!important;padding:22px!important;border:1px dashed var(--cc-line-strong)!important;border-radius:10px!important;text-align:center!important}
 #rate-card-dialog .rate-card-row strong{overflow:hidden!important;text-overflow:ellipsis!important;white-space:nowrap!important}
 #rate-card-dialog .rate-status{font-size:12px!important;font-weight:800!important}
 #rate-card-dialog .rate-status.configured{color:var(--cc-primary-strong)!important}
+#rate-card-dialog .rate-status.manual{color:var(--cc-primary-strong)!important}
 #rate-card-dialog .rate-status.missing{color:var(--cc-warn)!important}
+#rate-card-dialog .rate-status.synced{color:var(--cc-primary-strong)!important}
+#rate-card-dialog .rate-card-row input:disabled{opacity:.72!important;background:color-mix(in srgb,var(--cc-card) 80%,var(--cc-primary-soft))!important;cursor:not-allowed!important}
 #rate-card-dialog .rate-card-add{display:grid!important;grid-template-columns:1fr auto!important;gap:8px!important;margin-top:12px!important}
 #content-filter-dialog .content-filter-add{display:grid!important;grid-template-columns:minmax(0,1fr) minmax(140px,.55fr) auto!important;gap:8px!important;margin-top:12px!important}
 #log-detail-dialog .log-detail-grid{display:grid!important;grid-template-columns:repeat(4,minmax(0,1fr))!important;gap:10px!important}
@@ -414,6 +434,8 @@ html,body{margin:0;min-height:100%;background:var(--cc-page-bg);color:var(--cc-i
 @media (max-width:1100px){
   .cc-panel .stats{grid-template-columns:repeat(2,minmax(0,1fr))}
   .cc-panel .utility-row,.cc-panel .logs-head,.cc-panel .section-head{align-items:stretch;flex-direction:column}
+  .cc-panel .logs-actions{justify-items:stretch}
+  .cc-panel .log-storage-summary{justify-content:flex-start!important}
   .cc-panel .utility-actions,.cc-panel .key-tools,.cc-panel .log-tools,.cc-panel .analysis-controls{justify-content:flex-start}
   .cc-panel .drawer-grid.two{grid-template-columns:1fr}
   .cc-panel .usage-overview-grid{grid-template-columns:1fr!important;height:auto!important}
@@ -436,8 +458,11 @@ html,body{margin:0;min-height:100%;background:var(--cc-page-bg);color:var(--cc-i
   .cc-panel .hmetric{grid-template-columns:1fr}
   .cc-panel .analysis-log-item,.cc-panel .risk-item{grid-template-columns:1fr}
   #rate-card-dialog .rate-card-head{display:none!important}
+  #rate-card-dialog .rate-card-head,#rate-card-dialog .rate-card-row,#rate-card-dialog .rate-card-scroll{min-width:0!important}
   #rate-card-dialog .rate-card-row{grid-template-columns:1fr!important}
+  #rate-card-dialog .rate-card-table{overflow-x:hidden!important}
   #rate-card-dialog .rate-card-tools{grid-template-columns:1fr!important}
+  #rate-card-dialog .rate-sync-bar{align-items:flex-start!important;flex-direction:column!important}
   #content-filter-dialog .content-filter-add{grid-template-columns:1fr!important}
   #content-filter-dialog .content-filter-add button{width:100%!important}
   #content-filter-dialog .content-filter-list-tools{align-items:stretch!important;flex-direction:column!important}

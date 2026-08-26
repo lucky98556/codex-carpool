@@ -158,6 +158,20 @@ type OperationalLogPage struct {
 	TotalPages int              `json:"total_pages"`
 }
 
+// LogStorageSnapshot separates the physical SQLite footprint from the
+// logical payload owned by each mutually exclusive log view. Usage excludes
+// content-blocking rows even though both are stored in request_logs.
+type LogStorageSnapshot struct {
+	DatabaseBytes    int64 `json:"database_bytes"`
+	UsageBytes       int64 `json:"usage_bytes"`
+	UsageRows        int64 `json:"usage_rows"`
+	ForbiddenBytes   int64 `json:"forbidden_bytes"`
+	ForbiddenRows    int64 `json:"forbidden_rows"`
+	OperationalBytes int64 `json:"operational_bytes"`
+	OperationalRows  int64 `json:"operational_rows"`
+	RetentionDays    int   `json:"retention_days"`
+}
+
 // Summary exposes only the current dollar-meter product state. CPA accounts
 // and upstream quota snapshots are intentionally not represented here.
 func (engine *Engine) Summary(now time.Time) SummarySnapshot {

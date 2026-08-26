@@ -314,6 +314,21 @@ func (engine *Engine) ClearOperationalLogs() error {
 	return engine.store.ClearOperationalLogs()
 }
 
+func (engine *Engine) LogStorage() (LogStorageSnapshot, error) {
+	if engine == nil {
+		return LogStorageSnapshot{}, fmt.Errorf("codex-carpool is not initialized")
+	}
+	if err := engine.flushPending(); err != nil {
+		return LogStorageSnapshot{}, err
+	}
+	snapshot, err := engine.store.LogStorage()
+	if err != nil {
+		return LogStorageSnapshot{}, err
+	}
+	snapshot.RetentionDays = int(automaticLogRetention / (24 * time.Hour))
+	return snapshot, nil
+}
+
 func (engine *Engine) LogOperational(level, event, message, authID, keyID string) {
 	if engine == nil || engine.usageClosed.Load() {
 		return

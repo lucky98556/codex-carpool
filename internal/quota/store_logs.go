@@ -1,9 +1,47 @@
 package quota
 
 import (
+	"os"
 	"strings"
 	"time"
 )
+
+const (
+	requestLogFixedBytes     = 11 * 8
+	operationalLogFixedBytes = 2 * 8
+)
+
+// LogStorage reports actual SQLite file allocation and approximate logical
+// payload by log view. SQLite does not expose row-level physical page usage,
+// so per-view sizes combine UTF-8 text bytes with fixed-width numeric fields.
+func (store *Store) LogStorage() (LogStorageSnapshot, error) {
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	var snapshot LogStorageSnapshot
+	requestSize := `COALESCE(SUM(length(CAST(key_id AS BLOB))+length(CAST(key_suffix AS BLOB))+length(CAST(auth_id AS BLOB))+length(CAST(model AS BLOB))+length(CAST(request_content AS BLOB))+length(CAST(matched_term AS BLOB))+length(CAST(matched_category AS BLOB))+length(CAST(decision AS BLOB))+length(CAST(reason AS BLOB))+?),0)`
+	if err := store.db.QueryRow(`SELECT COUNT(*),`+requestSize+` FROM request_logs WHERE reason<>'content_forbidden'`, requestLogFixedBytes).Scan(&snapshot.UsageRows, &snapshot.UsageBytes); err != nil {
+		return LogStorageSnapshot{}, err
+	}
+	if err := store.db.QueryRow(`SELECT COUNT(*),`+requestSize+` FROM request_logs WHERE reason='content_forbidden'`, requestLogFixedBytes).Scan(&snapshot.ForbiddenRows, &snapshot.ForbiddenBytes); err != nil {
+		return LogStorageSnapshot{}, err
+	}
+	operationalSize := `COALESCE(SUM(length(CAST(level AS BLOB))+length(CAST(event AS BLOB))+length(CAST(message AS BLOB))+length(CAST(auth_id AS BLOB))+length(CAST(key_id AS BLOB))+?),0)`
+	if err := store.db.QueryRow(`SELECT COUNT(*),`+operationalSize+` FROM operational_logs`, operationalLogFixedBytes).Scan(&snapshot.OperationalRows, &snapshot.OperationalBytes); err != nil {
+		return LogStorageSnapshot{}, err
+	}
+	// WAL and shared-memory files are part of the live database footprint.
+	for _, path := range []string{store.databasePath, store.databasePath + "-wal", store.databasePath + "-shm"} {
+		info, err := os.Stat(path)
+		if err == nil {
+			snapshot.DatabaseBytes += info.Size()
+			continue
+		}
+		if !os.IsNotExist(err) {
+			return LogStorageSnapshot{}, err
+		}
+	}
+	return snapshot, nil
+}
 
 func (store *Store) ListDecisionLogs(keyID string, limit int) ([]DecisionLog, error) {
 	items, _, err := store.ListDecisionLogsPage(keyID, "", "", limit, 0)
@@ -33,9 +71,14 @@ func (store *Store) ListDecisionLogsPageInRange(keyID, decision, search string, 
 	if decision == "forbidden" {
 		where = append(where, "l.reason=?")
 		args = append(args, "content_forbidden")
-	} else if decision != "" {
-		where = append(where, "l.decision=?")
-		args = append(args, decision)
+	} else {
+		// Content-expression interceptions have their own log view and must not
+		// leak into usage-log searches, counts, pagination, or clear actions.
+		where = append(where, "l.reason<>'content_forbidden'")
+		if decision != "" {
+			where = append(where, "l.decision=?")
+			args = append(args, decision)
+		}
 	}
 	if search != "" {
 		where = append(where, "(l.model LIKE ? OR l.decision LIKE ? OR l.reason LIKE ? OR l.auth_id LIKE ? OR l.request_content LIKE ? OR p.name LIKE ? OR p.key_suffix LIKE ?)")
@@ -87,10 +130,10 @@ func (store *Store) ClearDecisionLogs(keyID string) error {
 	store.mu.Lock()
 	defer store.mu.Unlock()
 	if keyID = strings.TrimSpace(keyID); keyID != "" {
-		_, err := store.db.Exec(`DELETE FROM request_logs WHERE key_id=?`, keyID)
+		_, err := store.db.Exec(`DELETE FROM request_logs WHERE reason<>'content_forbidden' AND key_id=?`, keyID)
 		return err
 	}
-	_, err := store.db.Exec(`DELETE FROM request_logs`)
+	_, err := store.db.Exec(`DELETE FROM request_logs WHERE reason<>'content_forbidden'`)
 	return err
 }
 

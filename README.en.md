@@ -17,10 +17,11 @@ CPA remains responsible for credentials and routing. A Key that has not been add
 ## Features
 
 - Independent fixed 5-hour and 7-day USD cycles per added Key. The first request starts each cycle, later requests never move its boundary, and the whole cycle resets at its boundary. Blank or `0` means unlimited while metering remains active.
-- Operator-maintained per-model input, cached-input, and output prices in USD per million Tokens.
+- Complete per-model input, cache-read, cache-write, reasoning, and output prices in USD per million Tokens, including synchronized context tiers and identifiable service modes.
+- Optional third-party [models.dev](https://models.dev/) synchronization is disabled by default. Enabling it refreshes immediately and every 24 hours and updates only models in CPA's current catalog. A successful refresh retires stale synchronized rates while preserving manual rates; a failed refresh preserves the complete prior card. models.dev is not official vendor pricing and should be verified before production use.
 - Synchronization is limited to models currently supported by CPA. Each Key has an optional model allowlist; an empty selection means unrestricted.
-- Missing model rates return `503`; a configured rate with all three values set to `0` is free.
-- Terminal CPA usage settlement normalizes input, cached, output, and reasoning Tokens for Codex/OpenAI, Claude/Anthropic, and Gemini before calculating USD. A requested model alias uses that alias's manually configured rate.
+- Missing model rates return `503`; a configured rate with all values set to `0` is free.
+- Terminal CPA usage settlement normalizes input, cache reads, cache writes, output, reasoning, and service tier for Codex/OpenAI, Claude/Anthropic, and Gemini before calculating USD. A requested model alias uses that alias's manually configured rate.
 - If CPA reports no actual Tokens, the request is recorded as incomplete with zero Token and USD usage; no fixed estimate is substituted.
 - A registered Key in Track-only mode still records request excerpts, models, input/cache/output Tokens, USD cost, CPA AuthID, and both fixed cycles; over-budget requests continue.
 - Content-regex blocking is enabled by default with built-in and custom RE2 expressions. Usage trends support hourly, daily, monthly, and yearly views.
@@ -56,7 +57,7 @@ When the database has no model rates, the first startup seeds these entries once
 - `gpt-5.6-sol`
 - `gpt-5.6-luna`
 - `gpt-image-1.5`
-- `gpt-image-2` (input, cached, and output all `0`)
+- `gpt-image-2` (all rates are `0`)
 
 All values use USD per million Tokens. Edit them in **Rate settings** after synchronizing CPA's model catalog.
 
@@ -68,6 +69,7 @@ All values use USD per million Tokens. Edit them in **Rate settings** after sync
 - Plugin data is stored in `/CLIProxyAPI/plugins/codex-carpool/data/codex-carpool.db`.
 - The current release uses a new dollar-meter schema and does not read or migrate an earlier metering database; deploy it with a new empty database.
 - Safe plugin reload checkpoints unresolved callback markers so they can settle at the original request time and rate after reload.
+- Budgets settle from actual usage after CPA completes and reports a request. Concurrent requests can pass admission before any one of them settles, so the budget is a settled-usage threshold and a gate for subsequent requests, not a pre-authorized hard cap for one request or concurrent in-flight traffic.
 - CPA remains responsible for credentials and scheduling; this plugin does not create or edit account pools.
 
 ## Requirements and build
@@ -110,7 +112,7 @@ Remove older shared libraries with the same plugin name before restarting CPA. K
 
 1. Open `/v0/resource/plugins/codex-carpool/panel` in CPAMP.
 2. Click **Sync CPA Keys and models**.
-3. Open **Rate settings** and enter input, cached-input, and output prices for the models CPA returned.
+3. Open **Rate settings** and either maintain the complete prices manually or enable models.dev price synchronization. Unmatched aliases remain manually configurable.
 4. Add a Key, select its allowed models, and set 5-hour and 7-day USD budgets. Blank or `0` means unlimited. Track-only mode still calculates all windows and cost but does not reject over-budget traffic.
 5. Verify Token and USD settlement in usage logs; runtime logs record synchronization, rate saves, and settlement events.
 
@@ -128,7 +130,8 @@ Remove older shared libraries with the same plugin name before restarting CPA. K
 | GET / PUT | `/v0/management/codex-carpool/content-filter` | Forbidden-phrase settings |
 | GET / DELETE | `/v0/management/codex-carpool/forbidden-logs` | Forbidden-phrase log query and clear |
 | GET / PUT | `/v0/management/codex-carpool/models` | CPA model catalog synchronization |
-| GET / PUT | `/v0/management/codex-carpool/rates` | Per-model input, cache, and output prices |
+| GET / PUT | `/v0/management/codex-carpool/rates` | Complete per-model Token prices |
+| PUT | `/v0/management/codex-carpool/rate-sync` | Toggle models.dev price synchronization |
 
 ## Release checks
 

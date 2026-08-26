@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"math"
+	"net/http"
 	"sort"
 	"strings"
 	"sync"
@@ -18,6 +19,7 @@ const (
 	sevenDayWindow = 7 * 24 * time.Hour
 
 	usageBucketWindow        = time.Minute
+	automaticLogRetention    = 30 * 24 * time.Hour
 	persistenceFlushInterval = time.Second
 	usageCallbackDedupeTTL   = 15 * time.Minute
 	pendingRequestTTL        = 24 * time.Hour
@@ -250,8 +252,18 @@ type Engine struct {
 	policiesByID   map[string]KeyPolicy
 	policiesByHash map[string]string
 
-	ratesMu    sync.RWMutex
-	modelRates map[string]ModelRate
+	ratesMu        sync.RWMutex
+	modelRates     map[string]ModelRate
+	rateSyncMu     sync.RWMutex
+	rateSyncRunMu  sync.Mutex
+	rateSyncStatus ModelRateSyncStatus
+	rateSyncClient modelRateHTTPClient
+	rateSyncURL    string
+	rateSyncNow    func() time.Time
+	rateSyncWake   chan struct{}
+	rateSyncStop   chan struct{}
+	rateSyncDone   chan struct{}
+	rateSyncForced atomic.Bool
 
 	statesMu sync.RWMutex
 	states   engineStates
@@ -352,6 +364,11 @@ func Open(cfg RuntimeConfig) (*Engine, error) {
 		_ = store.Close()
 		return nil, err
 	}
+	rateSyncStatus, err := store.LoadModelRateSyncStatus()
+	if err != nil {
+		_ = store.Close()
+		return nil, err
+	}
 	pendingRequests, err := store.LoadPendingRequests(now)
 	if err != nil {
 		_ = store.Close()
@@ -367,6 +384,13 @@ func Open(cfg RuntimeConfig) (*Engine, error) {
 		policiesByID:           make(map[string]KeyPolicy, len(policies)),
 		policiesByHash:         make(map[string]string, len(policies)),
 		modelRates:             make(map[string]ModelRate, len(rates)),
+		rateSyncStatus:         rateSyncStatus,
+		rateSyncClient:         &http.Client{Timeout: modelRateSyncHTTPTimeout},
+		rateSyncURL:            modelsDevAPIURL,
+		rateSyncNow:            func() time.Time { return time.Now().UTC() },
+		rateSyncWake:           make(chan struct{}, 1),
+		rateSyncStop:           make(chan struct{}),
+		rateSyncDone:           make(chan struct{}),
 		states:                 engineStates{keys: make(map[string]*keyMeterState), spend: make(map[string]*keyMeterState)},
 		cycles:                 cycles,
 		store:                  store,
@@ -392,6 +416,7 @@ func Open(cfg RuntimeConfig) (*Engine, error) {
 	engine.pendingCount.Store(int64(len(pendingRequests)))
 	engine.replaceMeterStates(tokenEvents, spendEvents, now, engine.policiesByID)
 	go engine.flushLoop()
+	go engine.modelRateSyncLoop()
 	return engine, nil
 }
 
@@ -559,7 +584,7 @@ func (engine *Engine) admit(rawAPIKey, model, captureID string, now time.Time, c
 	if !configured {
 		return engine.blockAdmission(keyID, "", model, captured.Content, now, "model_rate_not_configured", "This model has no configured dollar rate", httpStatusServiceUnavailable, ContentFilterMatch{})
 	}
-	if policy.Enabled && (rate.inputMicrosPerMillion > 0 || rate.cachedMicrosPerMillion > 0 || rate.outputMicrosPerMillion > 0) {
+	if policy.Enabled && modelRateHasCost(rate) {
 		if coolingUntil := engine.dollarBudgetCoolingUntil(policy, now); coolingUntil != nil {
 			result := engine.blockAdmission(keyID, "", model, captured.Content, now, "key_dollar_budget_exhausted", "This API key has reached a configured fixed-cycle dollar budget", httpStatusTooManyRequests, ContentFilterMatch{})
 			result.RetryAt = coolingUntil
@@ -748,6 +773,7 @@ type CompletedUsage struct {
 	Alias               string
 	Provider            string
 	ExecutorType        string
+	ServiceTier         string
 	RequestedAt         time.Time
 	Generate            bool
 	Failed              bool
@@ -810,6 +836,8 @@ func (engine *Engine) RecordUsage(record CompletedUsage) {
 	cost := costBreakdown{}
 	if units > 0 {
 		cost, normalizedTokens = costBreakdownForUsage(marker.Rate, record)
+		normalizedTokens.Output = nonNegativeTokenSum(normalizedTokens.Output, normalizedTokens.Reasoning)
+		cost.Output = nonNegativeTokenSum(cost.Output, cost.Reasoning)
 		if !engine.chargeDollarSpend(keyID, requestedAt.Truncate(time.Millisecond), cost.Total) {
 			engine.persistenceDegraded.Store(true)
 		}
@@ -867,6 +895,8 @@ func (engine *Engine) recordUnenforcedUsage(marker pendingRequest, authID string
 	cost := costBreakdown{}
 	if units > 0 {
 		cost, normalizedTokens = costBreakdownForUsage(marker.Rate, record)
+		normalizedTokens.Output = nonNegativeTokenSum(normalizedTokens.Output, normalizedTokens.Reasoning)
+		cost.Output = nonNegativeTokenSum(cost.Output, cost.Reasoning)
 		if !engine.chargeDollarSpend(keyID, requestedAt.Truncate(time.Millisecond), cost.Total) {
 			engine.persistenceDegraded.Store(true)
 		}
@@ -915,7 +945,7 @@ func (engine *Engine) claimUsageCallback(keyID, authID string, requestedAt time.
 		return true
 	}
 	mac := hmac.New(sha256.New, []byte(secret))
-	_, _ = fmt.Fprintf(mac, "%s\x00%s\x00%s\x00%s\x00%s\x00%s\x00%d\x00%t\x00%t\x00%d\x00%d\x00%d\x00%d\x00%d\x00%d\x00%d\x00%d", keyID, authID, strings.TrimSpace(record.Model), strings.TrimSpace(record.Alias), strings.TrimSpace(record.Provider), strings.TrimSpace(record.ExecutorType), requestedAt.UTC().UnixNano(), record.Generate, record.Failed, record.FailureStatus, record.InputTokens, record.OutputTokens, record.ReasoningTokens, record.CachedTokens, record.CacheReadTokens, record.CacheCreationTokens, record.TotalTokens)
+	_, _ = fmt.Fprintf(mac, "%s\x00%s\x00%s\x00%s\x00%s\x00%s\x00%s\x00%d\x00%t\x00%t\x00%d\x00%d\x00%d\x00%d\x00%d\x00%d\x00%d\x00%d", keyID, authID, strings.TrimSpace(record.Model), strings.TrimSpace(record.Alias), strings.TrimSpace(record.Provider), strings.TrimSpace(record.ExecutorType), strings.TrimSpace(record.ServiceTier), requestedAt.UTC().UnixNano(), record.Generate, record.Failed, record.FailureStatus, record.InputTokens, record.OutputTokens, record.ReasoningTokens, record.CachedTokens, record.CacheReadTokens, record.CacheCreationTokens, record.TotalTokens)
 	id := hex.EncodeToString(mac.Sum(nil))
 	now, cutoff := time.Now().UTC(), time.Now().UTC().Add(-usageCallbackDedupeTTL)
 	engine.usageDedupeMu.Lock()
@@ -943,16 +973,12 @@ func completedUsageUnits(record CompletedUsage) int64 {
 	if record.TotalTokens > 0 {
 		return record.TotalTokens
 	}
-	var units int64
-	for _, value := range []int64{record.InputTokens, record.OutputTokens, record.ReasoningTokens} {
-		if value > 0 && units <= math.MaxInt64-value {
-			units += value
-		}
-	}
-	if units > 0 {
-		return units
-	}
-	return 0
+	// Reuse the provider-specific, non-overlapping buckets. Raw reasoning can
+	// already be included in output, while Claude cache tokens are independent.
+	tokens := normalizedBillableUsage(record)
+	units := nonNegativeTokenSum(tokens.Input, tokens.Cached)
+	units = nonNegativeTokenSum(units, tokens.Reasoning)
+	return nonNegativeTokenSum(units, tokens.Output)
 }
 
 func usageBucketEnd(now time.Time) time.Time {
@@ -1164,8 +1190,16 @@ func (engine *Engine) pruneRetention(now time.Time) {
 	engine.configMu.RLock()
 	retention := engine.config.RecordRetentionDuration
 	engine.configMu.RUnlock()
-	if err := engine.store.DeleteUsageEventsBefore(now.Add(-retention)); err != nil {
+	result, err := engine.store.PruneRetention(now.Add(-retention), now.Add(-automaticLogRetention), now.Add(-usageAnalysisRetention))
+	if err != nil {
 		engine.retentionFailures.Add(1)
+		engine.LogOperational("warn", "log_retention_cleanup_failed", "自动清理超过 30 天的日志失败："+err.Error(), "", "")
+		return
+	}
+	// Record only effective cleanup runs to avoid adding one empty audit row on
+	// every hourly retention sweep.
+	if result.LogRows() > 0 {
+		engine.LogOperational("info", "log_retention_cleanup", fmt.Sprintf("已自动清理超过 30 天的日志：使用日志 %d 条，内容拦截日志 %d 条，运行日志 %d 条", result.UsageLogs, result.ForbiddenLogs, result.OperationalLogs), "", "")
 	}
 }
 
@@ -1247,6 +1281,10 @@ func (engine *Engine) close(force bool) error {
 		engine.closeErr = fmt.Errorf("checkpoint pending requests: %w", err)
 	}
 	engine.usageClosed.Store(true)
+	close(engine.rateSyncStop)
+	<-engine.rateSyncDone
+	engine.rateSyncRunMu.Lock()
+	engine.rateSyncRunMu.Unlock()
 	close(engine.flushStop)
 	<-engine.flushDone
 	if err := engine.flushPending(); err != nil {

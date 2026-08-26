@@ -1,6 +1,7 @@
 package quota
 
 import (
+	"encoding/json"
 	"fmt"
 	"time"
 )
@@ -19,7 +20,7 @@ func (store *Store) ReplacePendingRequests(markers []pendingRequest) error {
 		return err
 	}
 	statement, err := tx.Prepare(`INSERT INTO pending_request_markers(key_id,auth_id,model,request_content,requested_at,managed,
-rate_input_micros,rate_cached_micros,rate_output_micros) VALUES(?,?,?,?,?,?,?,?,?)`)
+rate_input_micros,rate_cached_micros,rate_output_micros,rate_profile_json) VALUES(?,?,?,?,?,?,?,?,?,?)`)
 	if err != nil {
 		return err
 	}
@@ -28,8 +29,12 @@ rate_input_micros,rate_cached_micros,rate_output_micros) VALUES(?,?,?,?,?,?,?,?,
 		if marker.KeyID == "" || marker.RequestedAt.IsZero() {
 			continue
 		}
+		profile, err := json.Marshal(marker.Rate)
+		if err != nil {
+			return fmt.Errorf("encode pending request rate: %w", err)
+		}
 		if _, err := statement.Exec(marker.KeyID, marker.AuthID, marker.Model, marker.Content, marker.RequestedAt.UTC().UnixMilli(),
-			boolToInt(marker.Managed), marker.Rate.inputMicrosPerMillion, marker.Rate.cachedMicrosPerMillion, marker.Rate.outputMicrosPerMillion); err != nil {
+			boolToInt(marker.Managed), marker.Rate.inputMicrosPerMillion, marker.Rate.cacheReadMicrosPerMillion, marker.Rate.outputMicrosPerMillion, string(profile)); err != nil {
 			return fmt.Errorf("checkpoint pending request: %w", err)
 		}
 	}
@@ -43,7 +48,7 @@ func (store *Store) LoadPendingRequests(now time.Time) ([]pendingRequest, error)
 	if _, err := store.db.Exec(`DELETE FROM pending_request_markers WHERE requested_at < ?`, cutoff); err != nil {
 		return nil, err
 	}
-	rows, err := store.db.Query(`SELECT key_id,auth_id,model,request_content,requested_at,managed,rate_input_micros,rate_cached_micros,rate_output_micros
+	rows, err := store.db.Query(`SELECT key_id,auth_id,model,request_content,requested_at,managed,rate_input_micros,rate_cached_micros,rate_output_micros,rate_profile_json
 FROM pending_request_markers ORDER BY requested_at`)
 	if err != nil {
 		return nil, err
@@ -55,13 +60,24 @@ FROM pending_request_markers ORDER BY requested_at`)
 		var requestedAt int64
 		var managed int
 		var input, cached, output int64
-		if err := rows.Scan(&marker.KeyID, &marker.AuthID, &marker.Model, &marker.Content, &requestedAt, &managed, &input, &cached, &output); err != nil {
+		var profile string
+		if err := rows.Scan(&marker.KeyID, &marker.AuthID, &marker.Model, &marker.Content, &requestedAt, &managed, &input, &cached, &output, &profile); err != nil {
 			return nil, err
 		}
 		marker.RequestedAt = time.UnixMilli(requestedAt).UTC()
 		marker.Managed = managed != 0
 		marker.Checkpointed = true
 		marker.Rate = rateFromStored(marker.Model, input, cached, output, marker.RequestedAt)
+		if profile != "" {
+			if err := json.Unmarshal([]byte(profile), &marker.Rate); err != nil {
+				return nil, fmt.Errorf("decode pending request rate: %w", err)
+			}
+			marker.Rate.Model = marker.Model
+			marker.Rate, err = normalizeModelRate(marker.Rate)
+			if err != nil {
+				return nil, fmt.Errorf("normalize pending request rate: %w", err)
+			}
+		}
 		markers = append(markers, marker)
 	}
 	return markers, rows.Err()

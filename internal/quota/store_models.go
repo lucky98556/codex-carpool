@@ -1,6 +1,7 @@
 package quota
 
 import (
+	"encoding/json"
 	"fmt"
 	"sort"
 	"strings"
@@ -58,7 +59,7 @@ func (store *Store) ListModelCatalog() ([]ModelCatalogEntry, error) {
 func (store *Store) ListModelRates() ([]ModelRate, error) {
 	store.mu.Lock()
 	defer store.mu.Unlock()
-	rows, err := store.db.Query(`SELECT model,input_micros_per_million,cached_micros_per_million,output_micros_per_million,updated_at FROM model_rates ORDER BY model`)
+	rows, err := store.db.Query(`SELECT model,input_micros_per_million,cached_micros_per_million,output_micros_per_million,profile_json,updated_at FROM model_rates ORDER BY model`)
 	if err != nil {
 		return nil, err
 	}
@@ -67,10 +68,22 @@ func (store *Store) ListModelRates() ([]ModelRate, error) {
 	for rows.Next() {
 		var model string
 		var input, cached, output, updated int64
-		if err := rows.Scan(&model, &input, &cached, &output, &updated); err != nil {
+		var profile string
+		if err := rows.Scan(&model, &input, &cached, &output, &profile, &updated); err != nil {
 			return nil, err
 		}
-		items = append(items, rateFromStored(model, input, cached, output, time.UnixMilli(updated).UTC()))
+		item := rateFromStored(model, input, cached, output, time.UnixMilli(updated).UTC())
+		if strings.TrimSpace(profile) != "" {
+			if err := json.Unmarshal([]byte(profile), &item); err != nil {
+				return nil, fmt.Errorf("decode model rate %q: %w", model, err)
+			}
+			item.Model, item.UpdatedAt = model, time.UnixMilli(updated).UTC()
+			item, err = normalizeModelRate(item)
+			if err != nil {
+				return nil, fmt.Errorf("normalize stored model rate %q: %w", model, err)
+			}
+		}
+		items = append(items, item)
 	}
 	return items, rows.Err()
 }
@@ -91,7 +104,7 @@ func (store *Store) SeedDefaultModelRates(rates []ModelRate) error {
 		return err
 	}
 	defer func() { _ = tx.Rollback() }()
-	statement, err := tx.Prepare(`INSERT INTO model_rates(model,input_micros_per_million,cached_micros_per_million,output_micros_per_million,updated_at) VALUES(?,?,?,?,?)`)
+	statement, err := tx.Prepare(`INSERT INTO model_rates(model,input_micros_per_million,cached_micros_per_million,output_micros_per_million,profile_json,updated_at) VALUES(?,?,?,?,?,?)`)
 	if err != nil {
 		return err
 	}
@@ -102,7 +115,11 @@ func (store *Store) SeedDefaultModelRates(rates []ModelRate) error {
 		if err != nil {
 			return err
 		}
-		if _, err := statement.Exec(normalized.Model, normalized.inputMicrosPerMillion, normalized.cachedMicrosPerMillion, normalized.outputMicrosPerMillion, now); err != nil {
+		profile, err := json.Marshal(normalized)
+		if err != nil {
+			return err
+		}
+		if _, err := statement.Exec(normalized.Model, normalized.inputMicrosPerMillion, normalized.cacheReadMicrosPerMillion, normalized.outputMicrosPerMillion, string(profile), now); err != nil {
 			return err
 		}
 	}
@@ -134,7 +151,7 @@ func (store *Store) ReplaceModelRates(rates []ModelRate) error {
 	if _, err := tx.Exec(`DELETE FROM model_rates`); err != nil {
 		return err
 	}
-	statement, err := tx.Prepare(`INSERT INTO model_rates(model,input_micros_per_million,cached_micros_per_million,output_micros_per_million,updated_at) VALUES(?,?,?,?,?)`)
+	statement, err := tx.Prepare(`INSERT INTO model_rates(model,input_micros_per_million,cached_micros_per_million,output_micros_per_million,profile_json,updated_at) VALUES(?,?,?,?,?,?)`)
 	if err != nil {
 		return err
 	}
@@ -144,9 +161,106 @@ func (store *Store) ReplaceModelRates(rates []ModelRate) error {
 		if strings.TrimSpace(rate.Model) == "" {
 			continue
 		}
-		if _, err := statement.Exec(rate.Model, rate.inputMicrosPerMillion, rate.cachedMicrosPerMillion, rate.outputMicrosPerMillion, now); err != nil {
+		profile, err := json.Marshal(rate)
+		if err != nil {
+			return err
+		}
+		if _, err := statement.Exec(rate.Model, rate.inputMicrosPerMillion, rate.cacheReadMicrosPerMillion, rate.outputMicrosPerMillion, string(profile), now); err != nil {
 			return err
 		}
 	}
 	return tx.Commit()
+}
+
+// ReconcileSynchronizedModelRates atomically replaces one synchronization
+// source and its status while preserving every manually maintained rate.
+func (store *Store) ReconcileSynchronizedModelRates(source string, rates []ModelRate, status ModelRateSyncStatus) ([]string, ModelRateSyncStatus, error) {
+	source = strings.TrimSpace(source)
+	if source == "" {
+		return nil, status, fmt.Errorf("model rate synchronization source is required")
+	}
+	normalized := make([]ModelRate, 0, len(rates))
+	keep := make(map[string]struct{}, len(rates))
+	for _, raw := range rates {
+		rate, err := normalizeModelRate(raw)
+		if err != nil {
+			return nil, status, err
+		}
+		if rate.Source != source {
+			return nil, status, fmt.Errorf("model rate %q has synchronization source %q, want %q", rate.Model, rate.Source, source)
+		}
+		if _, exists := keep[rate.Model]; exists {
+			return nil, status, fmt.Errorf("model rate %q is duplicated", rate.Model)
+		}
+		keep[rate.Model] = struct{}{}
+		normalized = append(normalized, rate)
+	}
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	tx, err := store.db.Begin()
+	if err != nil {
+		return nil, status, err
+	}
+	defer func() { _ = tx.Rollback() }()
+	rows, err := tx.Query(`SELECT model,profile_json FROM model_rates`)
+	if err != nil {
+		return nil, status, err
+	}
+	retired := make([]string, 0)
+	for rows.Next() {
+		var model, profile string
+		if err := rows.Scan(&model, &profile); err != nil {
+			_ = rows.Close()
+			return nil, status, err
+		}
+		var stored ModelRate
+		if json.Unmarshal([]byte(profile), &stored) == nil && stored.Source == source {
+			if _, exists := keep[model]; !exists {
+				retired = append(retired, model)
+			}
+		}
+	}
+	if err := rows.Close(); err != nil {
+		return nil, status, err
+	}
+	for _, model := range retired {
+		if _, err := tx.Exec(`DELETE FROM model_rates WHERE model=?`, model); err != nil {
+			return nil, status, err
+		}
+	}
+	statement, err := tx.Prepare(`INSERT INTO model_rates(model,input_micros_per_million,cached_micros_per_million,output_micros_per_million,profile_json,updated_at)
+VALUES(?,?,?,?,?,?) ON CONFLICT(model) DO UPDATE SET input_micros_per_million=excluded.input_micros_per_million,
+cached_micros_per_million=excluded.cached_micros_per_million,output_micros_per_million=excluded.output_micros_per_million,
+profile_json=excluded.profile_json,updated_at=excluded.updated_at`)
+	if err != nil {
+		return nil, status, err
+	}
+	defer statement.Close()
+	for _, rate := range normalized {
+		profile, err := json.Marshal(rate)
+		if err != nil {
+			return nil, status, err
+		}
+		updatedAt := rate.UpdatedAt
+		if updatedAt.IsZero() {
+			updatedAt = time.Now().UTC()
+		}
+		if _, err := statement.Exec(rate.Model, rate.inputMicrosPerMillion, rate.cacheReadMicrosPerMillion, rate.outputMicrosPerMillion, string(profile), updatedAt.UnixMilli()); err != nil {
+			return nil, status, err
+		}
+	}
+	sort.Strings(retired)
+	status.RetiredModels = len(retired)
+	statusJSON, err := json.Marshal(status)
+	if err != nil {
+		return nil, status, err
+	}
+	if _, err := tx.Exec(`INSERT INTO plugin_metadata(name,value,updated_at) VALUES(?,?,?)
+ON CONFLICT(name) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at`, modelRateSyncMetadata, string(statusJSON), time.Now().UTC().UnixMilli()); err != nil {
+		return nil, status, err
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, status, err
+	}
+	return retired, status, nil
 }

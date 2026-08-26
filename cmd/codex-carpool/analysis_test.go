@@ -177,10 +177,12 @@ func TestManagementRegistrationUsesUsageManagementMenuName(t *testing.T) {
 		http.MethodGet + " /codex-carpool/model-ranking":     false,
 		http.MethodGet + " /codex-carpool/logs":              false,
 		http.MethodDelete + " /codex-carpool/logs":           false,
+		http.MethodGet + " /codex-carpool/log-storage":       false,
 		http.MethodGet + " /codex-carpool/content-filter":    false,
 		http.MethodPut + " /codex-carpool/content-filter":    false,
 		http.MethodGet + " /codex-carpool/forbidden-logs":    false,
 		http.MethodDelete + " /codex-carpool/forbidden-logs": false,
+		http.MethodPut + " /codex-carpool/rate-sync":         false,
 	}
 	for _, route := range registration.Routes {
 		key := route.Method + " " + route.Path

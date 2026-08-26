@@ -15,29 +15,69 @@ const usdMicrosPerDollar int64 = 1_000_000
 // no separately published API rate, so its seed intentionally follows the
 // published GPT-5.3-Codex text-token rate until an operator changes it.
 // GPT Image 1.5's per-image charges cannot be represented by the current
-// input/cache/output Token callback, so its seed covers text Tokens only.
+// Token callback, so its seed covers reported text Tokens only.
 // GPT Image 2 is an explicit operator-requested zero-rate exception.
 var defaultModelRates = []ModelRate{
-	{Model: "gpt-5.3-codex-spark", InputUSDPerMillion: 1.75, CachedUSDPerMillion: 0.175, OutputUSDPerMillion: 14},
-	{Model: "gpt-5.4-mini", InputUSDPerMillion: 0.75, CachedUSDPerMillion: 0.075, OutputUSDPerMillion: 4.5},
-	{Model: "gpt-5.6-sol", InputUSDPerMillion: 5, CachedUSDPerMillion: 0.5, OutputUSDPerMillion: 30},
-	{Model: "gpt-5.6-luna", InputUSDPerMillion: 1, CachedUSDPerMillion: 0.1, OutputUSDPerMillion: 6},
-	{Model: "gpt-image-1.5", InputUSDPerMillion: 5, CachedUSDPerMillion: 1.25, OutputUSDPerMillion: 10},
+	{Model: "gpt-5.3-codex-spark", InputUSDPerMillion: 1.75, CacheReadUSDPerMillion: 0.175, ReasoningUsesOutput: true, OutputUSDPerMillion: 14},
+	{Model: "gpt-5.4-mini", InputUSDPerMillion: 0.75, CacheReadUSDPerMillion: 0.075, ReasoningUsesOutput: true, OutputUSDPerMillion: 4.5},
+	{Model: "gpt-5.6-sol", InputUSDPerMillion: 5, CacheReadUSDPerMillion: 0.5, CacheWriteUSDPerMillion: 6.25, ReasoningUsesOutput: true, OutputUSDPerMillion: 30},
+	{Model: "gpt-5.6-luna", InputUSDPerMillion: 0.2, CacheReadUSDPerMillion: 0.02, CacheWriteUSDPerMillion: 0.25, ReasoningUsesOutput: true, OutputUSDPerMillion: 1.2},
+	{Model: "gpt-image-1.5", InputUSDPerMillion: 5, CacheReadUSDPerMillion: 1.25, OutputUSDPerMillion: 10},
 	{Model: "gpt-image-2"},
+}
+
+type ModelRateTier struct {
+	ContextOverTokens          int64   `json:"context_over_tokens"`
+	InputUSDPerMillion         float64 `json:"input_usd_per_million"`
+	CacheReadUSDPerMillion     float64 `json:"cache_read_usd_per_million"`
+	CacheWriteUSDPerMillion    float64 `json:"cache_write_usd_per_million"`
+	ReasoningUSDPerMillion     float64 `json:"reasoning_usd_per_million"`
+	ReasoningUsesOutput        bool    `json:"reasoning_uses_output,omitempty"`
+	OutputUSDPerMillion        float64 `json:"output_usd_per_million"`
+	inputMicrosPerMillion      int64
+	cacheReadMicrosPerMillion  int64
+	cacheWriteMicrosPerMillion int64
+	reasoningMicrosPerMillion  int64
+	outputMicrosPerMillion     int64
+}
+
+type ModelRateMode struct {
+	Name                       string  `json:"name"`
+	ServiceTier                string  `json:"service_tier"`
+	InputUSDPerMillion         float64 `json:"input_usd_per_million"`
+	CacheReadUSDPerMillion     float64 `json:"cache_read_usd_per_million"`
+	CacheWriteUSDPerMillion    float64 `json:"cache_write_usd_per_million"`
+	ReasoningUSDPerMillion     float64 `json:"reasoning_usd_per_million"`
+	ReasoningUsesOutput        bool    `json:"reasoning_uses_output,omitempty"`
+	OutputUSDPerMillion        float64 `json:"output_usd_per_million"`
+	inputMicrosPerMillion      int64
+	cacheReadMicrosPerMillion  int64
+	cacheWriteMicrosPerMillion int64
+	reasoningMicrosPerMillion  int64
+	outputMicrosPerMillion     int64
 }
 
 // ModelRate is the operator-maintained rate card. Values are US dollars per
 // one million Tokens; integer micro-dollars are used internally for all
 // accounting so a fixed-cycle budget never depends on floating-point rounding.
 type ModelRate struct {
-	Model                  string    `json:"model"`
-	InputUSDPerMillion     float64   `json:"input_usd_per_million"`
-	CachedUSDPerMillion    float64   `json:"cached_usd_per_million"`
-	OutputUSDPerMillion    float64   `json:"output_usd_per_million"`
-	UpdatedAt              time.Time `json:"updated_at"`
-	inputMicrosPerMillion  int64
-	cachedMicrosPerMillion int64
-	outputMicrosPerMillion int64
+	Model                      string          `json:"model"`
+	Provider                   string          `json:"provider,omitempty"`
+	Source                     string          `json:"source,omitempty"`
+	InputUSDPerMillion         float64         `json:"input_usd_per_million"`
+	CacheReadUSDPerMillion     float64         `json:"cache_read_usd_per_million"`
+	CacheWriteUSDPerMillion    float64         `json:"cache_write_usd_per_million"`
+	ReasoningUSDPerMillion     float64         `json:"reasoning_usd_per_million"`
+	ReasoningUsesOutput        bool            `json:"reasoning_uses_output,omitempty"`
+	OutputUSDPerMillion        float64         `json:"output_usd_per_million"`
+	Tiers                      []ModelRateTier `json:"tiers,omitempty"`
+	Modes                      []ModelRateMode `json:"modes,omitempty"`
+	UpdatedAt                  time.Time       `json:"updated_at"`
+	inputMicrosPerMillion      int64
+	cacheReadMicrosPerMillion  int64
+	cacheWriteMicrosPerMillion int64
+	reasoningMicrosPerMillion  int64
+	outputMicrosPerMillion     int64
 }
 
 // DollarWindowSnapshot is a Key-owned fixed spend cycle. It intentionally
@@ -73,7 +113,9 @@ func normalizeModelRate(rate ModelRate) (ModelRate, error) {
 		set   *int64
 	}{
 		{"input_usd_per_million", rate.InputUSDPerMillion, &rate.inputMicrosPerMillion},
-		{"cached_usd_per_million", rate.CachedUSDPerMillion, &rate.cachedMicrosPerMillion},
+		{"cache_read_usd_per_million", rate.CacheReadUSDPerMillion, &rate.cacheReadMicrosPerMillion},
+		{"cache_write_usd_per_million", rate.CacheWriteUSDPerMillion, &rate.cacheWriteMicrosPerMillion},
+		{"reasoning_usd_per_million", rate.ReasoningUSDPerMillion, &rate.reasoningMicrosPerMillion},
 		{"output_usd_per_million", rate.OutputUSDPerMillion, &rate.outputMicrosPerMillion},
 	}
 	for _, item := range values {
@@ -87,17 +129,59 @@ func normalizeModelRate(rate ModelRate) (ModelRate, error) {
 		*item.set = int64(math.Round(micros))
 	}
 	rate.InputUSDPerMillion = float64(rate.inputMicrosPerMillion) / float64(usdMicrosPerDollar)
-	rate.CachedUSDPerMillion = float64(rate.cachedMicrosPerMillion) / float64(usdMicrosPerDollar)
+	rate.CacheReadUSDPerMillion = float64(rate.cacheReadMicrosPerMillion) / float64(usdMicrosPerDollar)
+	rate.CacheWriteUSDPerMillion = float64(rate.cacheWriteMicrosPerMillion) / float64(usdMicrosPerDollar)
+	rate.ReasoningUSDPerMillion = float64(rate.reasoningMicrosPerMillion) / float64(usdMicrosPerDollar)
 	rate.OutputUSDPerMillion = float64(rate.outputMicrosPerMillion) / float64(usdMicrosPerDollar)
+	for index := range rate.Tiers {
+		if rate.Tiers[index].ContextOverTokens < 0 {
+			return ModelRate{}, fmt.Errorf("tier context_over_tokens must be non-negative")
+		}
+		if err := normalizeRatePrices("tier", rate.Tiers[index].InputUSDPerMillion, rate.Tiers[index].CacheReadUSDPerMillion, rate.Tiers[index].CacheWriteUSDPerMillion, rate.Tiers[index].ReasoningUSDPerMillion, rate.Tiers[index].OutputUSDPerMillion,
+			&rate.Tiers[index].inputMicrosPerMillion, &rate.Tiers[index].cacheReadMicrosPerMillion, &rate.Tiers[index].cacheWriteMicrosPerMillion, &rate.Tiers[index].reasoningMicrosPerMillion, &rate.Tiers[index].outputMicrosPerMillion); err != nil {
+			return ModelRate{}, err
+		}
+	}
+	sort.Slice(rate.Tiers, func(left, right int) bool {
+		return rate.Tiers[left].ContextOverTokens < rate.Tiers[right].ContextOverTokens
+	})
+	for index := range rate.Modes {
+		rate.Modes[index].Name = strings.TrimSpace(rate.Modes[index].Name)
+		rate.Modes[index].ServiceTier = strings.TrimSpace(rate.Modes[index].ServiceTier)
+		if rate.Modes[index].Name == "" || rate.Modes[index].ServiceTier == "" {
+			return ModelRate{}, fmt.Errorf("rate mode name and service_tier are required")
+		}
+		if err := normalizeRatePrices("mode", rate.Modes[index].InputUSDPerMillion, rate.Modes[index].CacheReadUSDPerMillion, rate.Modes[index].CacheWriteUSDPerMillion, rate.Modes[index].ReasoningUSDPerMillion, rate.Modes[index].OutputUSDPerMillion,
+			&rate.Modes[index].inputMicrosPerMillion, &rate.Modes[index].cacheReadMicrosPerMillion, &rate.Modes[index].cacheWriteMicrosPerMillion, &rate.Modes[index].reasoningMicrosPerMillion, &rate.Modes[index].outputMicrosPerMillion); err != nil {
+			return ModelRate{}, err
+		}
+	}
 	return rate, nil
+}
+
+func normalizeRatePrices(prefix string, input, cacheRead, cacheWrite, reasoning, output float64, inputMicros, cacheReadMicros, cacheWriteMicros, reasoningMicros, outputMicros *int64) error {
+	items := []struct {
+		name  string
+		value float64
+		set   *int64
+	}{
+		{"input", input, inputMicros}, {"cache_read", cacheRead, cacheReadMicros}, {"cache_write", cacheWrite, cacheWriteMicros}, {"reasoning", reasoning, reasoningMicros}, {"output", output, outputMicros},
+	}
+	for _, item := range items {
+		if math.IsNaN(item.value) || math.IsInf(item.value, 0) || item.value < 0 || item.value*float64(usdMicrosPerDollar) > float64(math.MaxInt64) {
+			return fmt.Errorf("%s %s price must be a non-negative finite number", prefix, item.name)
+		}
+		*item.set = int64(math.Round(item.value * float64(usdMicrosPerDollar)))
+	}
+	return nil
 }
 
 func rateFromStored(model string, input, cached, output int64, updatedAt time.Time) ModelRate {
 	return ModelRate{
 		Model: model, InputUSDPerMillion: float64(input) / float64(usdMicrosPerDollar),
-		CachedUSDPerMillion: float64(cached) / float64(usdMicrosPerDollar),
-		OutputUSDPerMillion: float64(output) / float64(usdMicrosPerDollar),
-		UpdatedAt:           updatedAt, inputMicrosPerMillion: input, cachedMicrosPerMillion: cached, outputMicrosPerMillion: output,
+		CacheReadUSDPerMillion: float64(cached) / float64(usdMicrosPerDollar), CacheWriteUSDPerMillion: float64(cached) / float64(usdMicrosPerDollar),
+		ReasoningUsesOutput: true, OutputUSDPerMillion: float64(output) / float64(usdMicrosPerDollar),
+		UpdatedAt: updatedAt, inputMicrosPerMillion: input, cacheReadMicrosPerMillion: cached, cacheWriteMicrosPerMillion: cached, outputMicrosPerMillion: output,
 	}
 }
 
@@ -113,37 +197,48 @@ func dollarBudgetMicros(value float64) (int64, error) {
 }
 
 type costBreakdown struct {
-	Input  int64
-	Cached int64
-	Output int64
-	Total  int64
+	Input      int64
+	CacheRead  int64
+	CacheWrite int64
+	Reasoning  int64
+	Cached     int64
+	Output     int64
+	Total      int64
 }
 
 func costBreakdownMicros(rate ModelRate, inputTokens, cachedTokens, outputTokens int64) costBreakdown {
 	// CPA reports cached input as part of the input total. Bill only the
 	// uncached remainder at the normal input rate, then price cache once at the
-	// operator-maintained cached-input rate.
+	// operator-maintained cache-read rate.
 	uncachedInput := inputTokens - cachedTokens
 	if uncachedInput < 0 {
 		uncachedInput = 0
 	}
-	return costBreakdownFromBillableMicros(rate, uncachedInput, cachedTokens, outputTokens)
+	return costBreakdownFromBillableMicros(rate, uncachedInput, cachedTokens, 0, 0, outputTokens)
 }
 
-func costBreakdownFromBillableMicros(rate ModelRate, inputTokens, cachedTokens, outputTokens int64) costBreakdown {
+func costBreakdownFromBillableMicros(rate ModelRate, inputTokens, cacheReadTokens, cacheWriteTokens, reasoningTokens, outputTokens int64) costBreakdown {
+	reasoningRate := rate.reasoningMicrosPerMillion
+	if rate.ReasoningUsesOutput {
+		reasoningRate = rate.outputMicrosPerMillion
+	}
 	parts := []struct {
 		tokens int64
 		rate   int64
 		value  *int64
 	}{
 		{inputTokens, rate.inputMicrosPerMillion, nil},
-		{cachedTokens, rate.cachedMicrosPerMillion, nil},
+		{cacheReadTokens, rate.cacheReadMicrosPerMillion, nil},
+		{cacheWriteTokens, rate.cacheWriteMicrosPerMillion, nil},
+		{reasoningTokens, reasoningRate, nil},
 		{outputTokens, rate.outputMicrosPerMillion, nil},
 	}
 	result := costBreakdown{}
 	parts[0].value = &result.Input
-	parts[1].value = &result.Cached
-	parts[2].value = &result.Output
+	parts[1].value = &result.CacheRead
+	parts[2].value = &result.CacheWrite
+	parts[3].value = &result.Reasoning
+	parts[4].value = &result.Output
 	for _, part := range parts {
 		if part.tokens <= 0 || part.rate <= 0 {
 			continue
@@ -157,6 +252,7 @@ func costBreakdownFromBillableMicros(rate ModelRate, inputTokens, cachedTokens, 
 		*part.value = int64(math.Round(value))
 		result.Total += *part.value
 	}
+	result.Cached = nonNegativeTokenSum(result.CacheRead, result.CacheWrite)
 	return result
 }
 
@@ -172,9 +268,12 @@ func cachedUsageTokens(record CompletedUsage) int64 {
 }
 
 type normalizedUsageTokens struct {
-	Input  int64
-	Cached int64
-	Output int64
+	Input      int64
+	CacheRead  int64
+	CacheWrite int64
+	Cached     int64
+	Reasoning  int64
+	Output     int64
 }
 
 func nonNegativeTokenSum(left, right int64) int64 {
@@ -186,11 +285,22 @@ func nonNegativeTokenSum(left, right int64) int64 {
 }
 
 func normalizedBillableUsage(record CompletedUsage) normalizedUsageTokens {
-	provider := strings.ToLower(strings.TrimSpace(record.Provider + " " + record.ExecutorType))
-	cached := cachedUsageTokens(record)
+	provider := strings.ToLower(strings.TrimSpace(record.Provider + " " + record.ExecutorType + " " + record.Model))
+	cacheRead, cacheWrite := max(record.CacheReadTokens, 0), max(record.CacheCreationTokens, 0)
+	if cacheRead == 0 && cacheWrite == 0 {
+		cacheRead = max(record.CachedTokens, 0)
+	}
+	cached := nonNegativeTokenSum(cacheRead, cacheWrite)
 	input, output := max(record.InputTokens, 0), max(record.OutputTokens, 0)
 	independentCache := strings.Contains(provider, "claude") || strings.Contains(provider, "anthropic")
 	separateReasoning := independentCache
+	reasoningIncludedInOutput := false
+	for _, marker := range []string{"openai", "codex", "gpt-", "xai", "grok", "kimi", "qwen", "deepseek", "openrouter"} {
+		if strings.Contains(provider, marker) {
+			reasoningIncludedInOutput = true
+			break
+		}
+	}
 	for _, marker := range []string{"gemini", "aistudio", "antigravity", "vertex", "interaction"} {
 		if strings.Contains(provider, marker) {
 			separateReasoning = true
@@ -203,15 +313,69 @@ func normalizedBillableUsage(record CompletedUsage) normalizedUsageTokens {
 			input = 0
 		}
 	}
+	reasoning := int64(0)
 	if separateReasoning {
-		output = nonNegativeTokenSum(output, record.ReasoningTokens)
+		reasoning = max(record.ReasoningTokens, 0)
+	} else if reasoningIncludedInOutput {
+		// OpenAI-compatible providers report reasoning as an output subset.
+		// Split it out so a dedicated rate never charges the same tokens again.
+		reasoning = min(max(record.ReasoningTokens, 0), output)
+		output -= reasoning
 	}
-	return normalizedUsageTokens{Input: input, Cached: cached, Output: output}
+	return normalizedUsageTokens{Input: input, CacheRead: cacheRead, CacheWrite: cacheWrite, Cached: cached, Reasoning: reasoning, Output: output}
 }
 
 func costBreakdownForUsage(rate ModelRate, record CompletedUsage) (costBreakdown, normalizedUsageTokens) {
 	tokens := normalizedBillableUsage(record)
-	return costBreakdownFromBillableMicros(rate, tokens.Input, tokens.Cached, tokens.Output), tokens
+	rate = rateForCompletedUsage(rate, record, tokens)
+	return costBreakdownFromBillableMicros(rate, tokens.Input, tokens.CacheRead, tokens.CacheWrite, tokens.Reasoning, tokens.Output), tokens
+}
+
+func rateForCompletedUsage(rate ModelRate, record CompletedUsage, tokens normalizedUsageTokens) ModelRate {
+	contextTokens := nonNegativeTokenSum(tokens.Input, tokens.Cached)
+	for _, tier := range rate.Tiers {
+		if contextTokens < tier.ContextOverTokens {
+			continue
+		}
+		rate.inputMicrosPerMillion, rate.cacheReadMicrosPerMillion = tier.inputMicrosPerMillion, tier.cacheReadMicrosPerMillion
+		rate.cacheWriteMicrosPerMillion, rate.reasoningMicrosPerMillion = tier.cacheWriteMicrosPerMillion, tier.reasoningMicrosPerMillion
+		rate.ReasoningUsesOutput = tier.ReasoningUsesOutput
+		rate.outputMicrosPerMillion = tier.outputMicrosPerMillion
+	}
+	serviceTier := strings.ToLower(strings.TrimSpace(record.ServiceTier))
+	// CPA does not expose a separately verified response tier to plugins. An
+	// automatic request therefore uses the base rate instead of a premium mode.
+	if serviceTier == "auto" {
+		serviceTier = ""
+	}
+	for _, mode := range rate.Modes {
+		if strings.EqualFold(mode.ServiceTier, serviceTier) {
+			rate.inputMicrosPerMillion, rate.cacheReadMicrosPerMillion = mode.inputMicrosPerMillion, mode.cacheReadMicrosPerMillion
+			rate.cacheWriteMicrosPerMillion, rate.reasoningMicrosPerMillion = mode.cacheWriteMicrosPerMillion, mode.reasoningMicrosPerMillion
+			rate.ReasoningUsesOutput = mode.ReasoningUsesOutput
+			rate.outputMicrosPerMillion = mode.outputMicrosPerMillion
+			break
+		}
+	}
+	return rate
+}
+
+func modelRateHasCost(rate ModelRate) bool {
+	if rate.inputMicrosPerMillion > 0 || rate.cacheReadMicrosPerMillion > 0 || rate.cacheWriteMicrosPerMillion > 0 ||
+		rate.reasoningMicrosPerMillion > 0 || rate.outputMicrosPerMillion > 0 {
+		return true
+	}
+	for _, tier := range rate.Tiers {
+		if tier.inputMicrosPerMillion > 0 || tier.cacheReadMicrosPerMillion > 0 || tier.cacheWriteMicrosPerMillion > 0 || tier.reasoningMicrosPerMillion > 0 || tier.outputMicrosPerMillion > 0 {
+			return true
+		}
+	}
+	for _, mode := range rate.Modes {
+		if mode.inputMicrosPerMillion > 0 || mode.cacheReadMicrosPerMillion > 0 || mode.cacheWriteMicrosPerMillion > 0 || mode.reasoningMicrosPerMillion > 0 || mode.outputMicrosPerMillion > 0 {
+			return true
+		}
+	}
+	return false
 }
 
 func fixedWindowSnapshot(state *keyMeterState, now time.Time, budget int64, startedAt time.Time, window time.Duration) DollarWindowSnapshot {
@@ -311,6 +475,9 @@ func laterCoolingUntil(left, right *time.Time) *time.Time {
 func sortedModelRates(rates map[string]ModelRate) []ModelRate {
 	items := make([]ModelRate, 0, len(rates))
 	for _, rate := range rates {
+		if strings.TrimSpace(rate.Source) == "" {
+			rate.Source = "manual"
+		}
 		items = append(items, rate)
 	}
 	sort.Slice(items, func(left, right int) bool { return items[left].Model < items[right].Model })
@@ -357,10 +524,15 @@ func (engine *Engine) ReplaceModelRates(rates []ModelRate) ([]ModelRate, error) 
 	if engine == nil {
 		return nil, fmt.Errorf("codex-carpool is not initialized")
 	}
+	engine.rateSyncRunMu.Lock()
+	defer engine.rateSyncRunMu.Unlock()
 	normalized := make([]ModelRate, 0, len(rates))
 	next := make(map[string]ModelRate, len(rates))
 	updatedAt := time.Now().UTC()
 	for _, rate := range rates {
+		if strings.TrimSpace(rate.Source) == "" {
+			rate.Source = "manual"
+		}
 		rate, err := normalizeModelRate(rate)
 		if err != nil {
 			return nil, err

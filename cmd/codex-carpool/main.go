@@ -362,6 +362,10 @@ type ratesRequest struct {
 	Rates []quota.ModelRate `json:"rates"`
 }
 
+type rateSyncRequest struct {
+	Enabled bool `json:"enabled"`
+}
+
 type contentFilterRequest struct {
 	Settings quota.ContentFilterSettings `json:"settings"`
 }
@@ -518,6 +522,7 @@ func handleMethod(method string, request []byte) ([]byte, error) {
 				{Method: http.MethodGet, Path: "/" + pluginName + "/model-ranking", Description: "Returns the all-Key daily model Token and dollar usage ranking."},
 				{Method: http.MethodGet, Path: "/" + pluginName + "/logs", Description: "Filters and pages compact per-Key routing and usage decision logs."},
 				{Method: http.MethodDelete, Path: "/" + pluginName + "/logs", Description: "Clears routing and usage decision logs for one Key without changing its quota."},
+				{Method: http.MethodGet, Path: "/" + pluginName + "/log-storage", Description: "Returns the SQLite footprint and per-log logical storage usage."},
 				{Method: http.MethodGet, Path: "/" + pluginName + "/operation-logs", Description: "Lists plugin runtime and error logs."},
 				{Method: http.MethodDelete, Path: "/" + pluginName + "/operation-logs", Description: "Clears plugin runtime and error logs without changing Key usage or quota."},
 				{Method: http.MethodGet, Path: "/" + pluginName + "/content-filter", Description: "Returns the RE2 content filter and its built-in/custom expressions."},
@@ -527,7 +532,8 @@ func handleMethod(method string, request []byte) ([]byte, error) {
 				{Method: http.MethodGet, Path: "/" + pluginName + "/models", Description: "Lists the CPA-synchronized available model catalog."},
 				{Method: http.MethodPut, Path: "/" + pluginName + "/models", Description: "Replaces the CPA-synchronized available model catalog."},
 				{Method: http.MethodGet, Path: "/" + pluginName + "/rates", Description: "Lists the operator-maintained per-model dollar rate card."},
-				{Method: http.MethodPut, Path: "/" + pluginName + "/rates", Description: "Atomically replaces the per-model input, cached-input, and output dollar rates."},
+				{Method: http.MethodPut, Path: "/" + pluginName + "/rates", Description: "Atomically replaces the complete per-model Token rate card."},
+				{Method: http.MethodPut, Path: "/" + pluginName + "/rate-sync", Description: "Enables or disables models.dev rate synchronization."},
 			},
 			Resources: []resourceRoute{{
 				Path: "/panel",
@@ -669,6 +675,7 @@ func handleUsage(raw []byte) ([]byte, error) {
 			Alias:               record.Alias,
 			Provider:            record.Provider,
 			ExecutorType:        record.ExecutorType,
+			ServiceTier:         record.ServiceTier,
 			RequestedAt:         record.RequestedAt,
 			Generate:            record.Generate,
 			Failed:              record.Failed,
@@ -827,6 +834,12 @@ func handleManagement(raw []byte) ([]byte, error) {
 			return fail(http.StatusBadRequest, err)
 		}
 		return managementJSON(http.StatusOK, map[string]string{"status": "ok"})
+	case path == apiPrefix+"/log-storage" && method == http.MethodGet:
+		storage, err := engine.LogStorage()
+		if err != nil {
+			return fail(http.StatusInternalServerError, errors.New("read log database size failed"))
+		}
+		return managementJSON(http.StatusOK, storage)
 	case path == apiPrefix+"/operation-logs" && method == http.MethodGet:
 		logs, err := engine.OperationalLogPage(strings.TrimSpace(request.Query.Get("level")), strings.TrimSpace(request.Query.Get("query")), parsePage(request.Query.Get("page")), parseLogPageSize(request.Query.Get("page_size")))
 		if err != nil {
@@ -882,9 +895,14 @@ func handleManagement(raw []byte) ([]byte, error) {
 			return fail(http.StatusBadRequest, err)
 		}
 		engine.LogOperational("info", "model_catalog_synced", fmt.Sprintf("已同步 %d 个 CPA 可用模型", len(payload.Models)), "", "")
+		if engine.ModelRateSyncStatus().Enabled {
+			// Reconcile prices on the managed loop so this local catalog update is
+			// never blocked by the external models.dev request.
+			engine.RequestModelRateSync()
+		}
 		return managementJSON(http.StatusOK, map[string]string{"status": "ok"})
 	case path == apiPrefix+"/rates" && method == http.MethodGet:
-		return managementJSON(http.StatusOK, map[string]any{"rates": engine.ModelRates()})
+		return managementJSON(http.StatusOK, map[string]any{"rates": engine.ModelRates(), "sync": engine.ModelRateSyncStatus()})
 	case path == apiPrefix+"/rates" && method == http.MethodPut:
 		var payload ratesRequest
 		if err := json.Unmarshal(request.Body, &payload); err != nil {
@@ -895,7 +913,25 @@ func handleManagement(raw []byte) ([]byte, error) {
 			return fail(http.StatusBadRequest, err)
 		}
 		engine.LogOperational("info", "model_rates_saved", fmt.Sprintf("模型费率已更新：%d 个模型", len(rates)), "", "")
-		return managementJSON(http.StatusOK, map[string]any{"rates": rates})
+		return managementJSON(http.StatusOK, map[string]any{"rates": rates, "sync": engine.ModelRateSyncStatus()})
+	case path == apiPrefix+"/rate-sync" && method == http.MethodPut:
+		var payload rateSyncRequest
+		if err := json.Unmarshal(request.Body, &payload); err != nil {
+			return fail(http.StatusBadRequest, errors.New("invalid JSON body"))
+		}
+		status, err := engine.SetModelRateSyncEnabled(payload.Enabled)
+		if err != nil {
+			return fail(http.StatusInternalServerError, err)
+		}
+		level, event, message := "info", "model_rate_sync_disabled", "models.dev 价格同步已关闭"
+		if payload.Enabled {
+			event, message = "model_rate_sync_enabled", "models.dev 价格同步已开启"
+			if status.LastError != "" {
+				level, message = "warn", "models.dev 价格同步已开启，首次同步失败并保留原费率："+status.LastError
+			}
+		}
+		engine.LogOperational(level, event, message, "", "")
+		return managementJSON(http.StatusOK, map[string]any{"rates": engine.ModelRates(), "sync": status})
 	default:
 		return fail(http.StatusNotFound, errors.New("plugin route not found"))
 	}

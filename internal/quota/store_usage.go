@@ -354,26 +354,51 @@ func (store *Store) AnalysisReaderDegraded() bool {
 	return store.analysisReaderDegraded
 }
 
-func (store *Store) DeleteUsageEventsBefore(before time.Time) error {
+type RetentionCleanupResult struct {
+	UsageLogs       int64
+	ForbiddenLogs   int64
+	OperationalLogs int64
+}
+
+func (result RetentionCleanupResult) LogRows() int64 {
+	return result.UsageLogs + result.ForbiddenLogs + result.OperationalLogs
+}
+
+// PruneRetention keeps aggregate-retention configuration independent from the
+// fixed 30-day request/runtime log policy.
+func (store *Store) PruneRetention(usageBefore, logBefore, analysisBefore time.Time) (RetentionCleanupResult, error) {
 	store.mu.Lock()
 	defer store.mu.Unlock()
+	var result RetentionCleanupResult
 	tx, err := store.db.Begin()
 	if err != nil {
-		return err
+		return result, err
 	}
 	defer func() { _ = tx.Rollback() }()
-	cutoff := before.UTC().UnixMilli()
-	for _, query := range []string{
-		`DELETE FROM usage_buckets WHERE bucket_at < ?`,
-		`DELETE FROM request_logs WHERE requested_at < ?`,
-		`DELETE FROM operational_logs WHERE occurred_at < ?`,
-	} {
-		if _, err := tx.Exec(query, cutoff); err != nil {
-			return err
-		}
+	if _, err := tx.Exec(`DELETE FROM usage_buckets WHERE bucket_at < ?`, usageBefore.UTC().UnixMilli()); err != nil {
+		return result, err
 	}
-	if _, err := tx.Exec(`DELETE FROM usage_analysis_buckets WHERE bucket_at < ?`, time.Now().UTC().Add(-usageAnalysisRetention).UnixMilli()); err != nil {
-		return err
+	logCutoff := logBefore.UTC().UnixMilli()
+	deleted, err := tx.Exec(`DELETE FROM request_logs WHERE requested_at < ? AND reason='content_forbidden'`, logCutoff)
+	if err != nil {
+		return result, err
 	}
-	return tx.Commit()
+	result.ForbiddenLogs, _ = deleted.RowsAffected()
+	deleted, err = tx.Exec(`DELETE FROM request_logs WHERE requested_at < ?`, logCutoff)
+	if err != nil {
+		return result, err
+	}
+	result.UsageLogs, _ = deleted.RowsAffected()
+	deleted, err = tx.Exec(`DELETE FROM operational_logs WHERE occurred_at < ?`, logCutoff)
+	if err != nil {
+		return result, err
+	}
+	result.OperationalLogs, _ = deleted.RowsAffected()
+	if _, err := tx.Exec(`DELETE FROM usage_analysis_buckets WHERE bucket_at < ?`, analysisBefore.UTC().UnixMilli()); err != nil {
+		return result, err
+	}
+	if err := tx.Commit(); err != nil {
+		return RetentionCleanupResult{}, err
+	}
+	return result, nil
 }

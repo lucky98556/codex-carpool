@@ -2,11 +2,43 @@ package quota
 
 import (
 	"context"
+	"database/sql"
 	"path/filepath"
 	"runtime"
 	"testing"
 	"time"
 )
+
+func TestOpenStoreAddsCompleteRateProfilesToExistingDatabase(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("native plugin database lock is Linux-only")
+	}
+	path := filepath.Join(t.TempDir(), "legacy-rate.db")
+	db, err := sql.Open("sqlite3", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`CREATE TABLE model_rates(model TEXT PRIMARY KEY,input_micros_per_million INTEGER NOT NULL,cached_micros_per_million INTEGER NOT NULL,output_micros_per_million INTEGER NOT NULL,updated_at INTEGER NOT NULL);
+INSERT INTO model_rates VALUES('legacy-model',1000000,250000,4000000,0);`); err != nil {
+		_ = db.Close()
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	store, err := OpenStore(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = store.Close() }()
+	rates, err := store.ListModelRates()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rates) != 1 || rates[0].CacheReadUSDPerMillion != .25 || rates[0].CacheWriteUSDPerMillion != .25 || !rates[0].ReasoningUsesOutput {
+		t.Fatalf("migrated rates = %+v", rates)
+	}
+}
 
 func TestOpenSeedsDefaultModelRatesOnlyForEmptyRateCard(t *testing.T) {
 	if runtime.GOOS != "linux" {
@@ -31,12 +63,16 @@ func TestOpenSeedsDefaultModelRatesOnlyForEmptyRateCard(t *testing.T) {
 	}
 	for _, expected := range defaultModelRates {
 		actual, exists := engine.modelRate(expected.Model)
-		if !exists || actual.InputUSDPerMillion != expected.InputUSDPerMillion || actual.CachedUSDPerMillion != expected.CachedUSDPerMillion || actual.OutputUSDPerMillion != expected.OutputUSDPerMillion {
+		if !exists || actual.InputUSDPerMillion != expected.InputUSDPerMillion || actual.CacheReadUSDPerMillion != expected.CacheReadUSDPerMillion || actual.CacheWriteUSDPerMillion != expected.CacheWriteUSDPerMillion || actual.OutputUSDPerMillion != expected.OutputUSDPerMillion {
 			_ = engine.Close()
 			t.Fatalf("seeded rate for %q = %+v, exists=%t", expected.Model, actual, exists)
 		}
 	}
-	if _, err := engine.ReplaceModelRates([]ModelRate{{Model: "operator-custom", InputUSDPerMillion: 3, CachedUSDPerMillion: 0.3, OutputUSDPerMillion: 12}}); err != nil {
+	if _, err := engine.ReplaceModelRates([]ModelRate{{
+		Model: "operator-custom", InputUSDPerMillion: 3, CacheReadUSDPerMillion: 0.3, CacheWriteUSDPerMillion: 3, OutputUSDPerMillion: 12,
+		Tiers: []ModelRateTier{{ContextOverTokens: 200_000, InputUSDPerMillion: 6, OutputUSDPerMillion: 18}},
+		Modes: []ModelRateMode{{Name: "fast", ServiceTier: "priority", InputUSDPerMillion: 8, OutputUSDPerMillion: 24}},
+	}}); err != nil {
 		_ = engine.Close()
 		t.Fatalf("ReplaceModelRates() error = %v", err)
 	}
@@ -50,17 +86,18 @@ func TestOpenSeedsDefaultModelRatesOnlyForEmptyRateCard(t *testing.T) {
 	}
 	defer func() { _ = reopened.Close() }()
 	rates = reopened.ModelRates()
-	if len(rates) != 1 || rates[0].Model != "operator-custom" || rates[0].OutputUSDPerMillion != 12 {
+	if len(rates) != 1 || rates[0].Model != "operator-custom" || rates[0].OutputUSDPerMillion != 12 || len(rates[0].Tiers) != 1 || len(rates[0].Modes) != 1 {
 		t.Fatalf("reopened rates = %+v, want preserved operator rate only", rates)
 	}
 }
 
 func TestCostMicrosBillsCachedInputOnlyOnce(t *testing.T) {
 	rate, err := normalizeModelRate(ModelRate{
-		Model:               "codex-test",
-		InputUSDPerMillion:  10,
-		CachedUSDPerMillion: 2.5,
-		OutputUSDPerMillion: 40,
+		Model:                   "codex-test",
+		InputUSDPerMillion:      10,
+		CacheReadUSDPerMillion:  2.5,
+		CacheWriteUSDPerMillion: 10,
+		OutputUSDPerMillion:     40,
 	})
 	if err != nil {
 		t.Fatalf("normalizeModelRate() error = %v", err)
@@ -77,7 +114,7 @@ func TestCostMicrosBillsCachedInputOnlyOnce(t *testing.T) {
 
 func TestCostBreakdownMicrosPreservesEveryPriceComponent(t *testing.T) {
 	rate, err := normalizeModelRate(ModelRate{
-		Model: "all-components", InputUSDPerMillion: 10, CachedUSDPerMillion: 2.5, OutputUSDPerMillion: 40,
+		Model: "all-components", InputUSDPerMillion: 10, CacheReadUSDPerMillion: 2.5, CacheWriteUSDPerMillion: 10, OutputUSDPerMillion: 40,
 	})
 	if err != nil {
 		t.Fatalf("normalizeModelRate() error = %v", err)
@@ -350,26 +387,50 @@ func TestManagedDollarBudgetCyclesStayAnchoredToFirstRequest(t *testing.T) {
 }
 
 func TestProviderTokenSemanticsProduceNonOverlappingBillableBuckets(t *testing.T) {
-	rate, err := normalizeModelRate(ModelRate{Model: "test", InputUSDPerMillion: 10, CachedUSDPerMillion: 2.5, OutputUSDPerMillion: 40})
+	baseRate := ModelRate{Model: "test", InputUSDPerMillion: 10, CacheReadUSDPerMillion: 2.5, CacheWriteUSDPerMillion: 10, OutputUSDPerMillion: 40}
+	rate, err := normalizeModelRate(baseRate)
 	if err != nil {
 		t.Fatal(err)
 	}
 	tests := []struct {
-		name       string
-		record     CompletedUsage
-		wantTokens normalizedUsageTokens
-		wantCost   int64
+		name                string
+		reasoningUsesOutput bool
+		record              CompletedUsage
+		wantTokens          normalizedUsageTokens
+		wantCost            int64
 	}{
-		{name: "Codex cached and reasoning subsets", record: CompletedUsage{Provider: "codex", InputTokens: 1_000_000, CacheReadTokens: 250_000, OutputTokens: 100_000, ReasoningTokens: 50_000}, wantTokens: normalizedUsageTokens{Input: 750_000, Cached: 250_000, Output: 100_000}, wantCost: 12_125_000},
-		{name: "OpenAI-compatible cached and reasoning subsets", record: CompletedUsage{ExecutorType: "OpenAICompatExecutor", InputTokens: 1_000_000, CacheReadTokens: 250_000, OutputTokens: 100_000, ReasoningTokens: 50_000}, wantTokens: normalizedUsageTokens{Input: 750_000, Cached: 250_000, Output: 100_000}, wantCost: 12_125_000},
-		{name: "Claude independent cache and reasoning", record: CompletedUsage{ExecutorType: "ClaudeExecutor", InputTokens: 1_000_000, CacheReadTokens: 250_000, OutputTokens: 100_000, ReasoningTokens: 50_000}, wantTokens: normalizedUsageTokens{Input: 1_000_000, Cached: 250_000, Output: 150_000}, wantCost: 16_625_000},
-		{name: "Gemini separate reasoning", record: CompletedUsage{Provider: "gemini", InputTokens: 1_000_000, CacheReadTokens: 250_000, OutputTokens: 100_000, ReasoningTokens: 50_000}, wantTokens: normalizedUsageTokens{Input: 750_000, Cached: 250_000, Output: 150_000}, wantCost: 14_125_000},
+		{name: "Codex cached and reasoning subsets", reasoningUsesOutput: true, record: CompletedUsage{Provider: "codex", InputTokens: 1_000_000, CacheReadTokens: 250_000, OutputTokens: 100_000, ReasoningTokens: 50_000}, wantTokens: normalizedUsageTokens{Input: 750_000, CacheRead: 250_000, Cached: 250_000, Reasoning: 50_000, Output: 50_000}, wantCost: 12_125_000},
+		{name: "OpenAI-compatible cached and reasoning subsets", reasoningUsesOutput: true, record: CompletedUsage{ExecutorType: "OpenAICompatExecutor", InputTokens: 1_000_000, CacheReadTokens: 250_000, OutputTokens: 100_000, ReasoningTokens: 50_000}, wantTokens: normalizedUsageTokens{Input: 750_000, CacheRead: 250_000, Cached: 250_000, Reasoning: 50_000, Output: 50_000}, wantCost: 12_125_000},
+		{name: "xAI reasoning is an output subset", reasoningUsesOutput: true, record: CompletedUsage{Provider: "xai", InputTokens: 1_000_000, CacheReadTokens: 250_000, OutputTokens: 100_000, ReasoningTokens: 50_000}, wantTokens: normalizedUsageTokens{Input: 750_000, CacheRead: 250_000, Cached: 250_000, Reasoning: 50_000, Output: 50_000}, wantCost: 12_125_000},
+		{name: "DeepSeek reasoning is an output subset", reasoningUsesOutput: true, record: CompletedUsage{Provider: "deepseek", InputTokens: 1_000_000, CacheReadTokens: 250_000, OutputTokens: 100_000, ReasoningTokens: 50_000}, wantTokens: normalizedUsageTokens{Input: 750_000, CacheRead: 250_000, Cached: 250_000, Reasoning: 50_000, Output: 50_000}, wantCost: 12_125_000},
+		{name: "Claude independent cache and reasoning", record: CompletedUsage{ExecutorType: "ClaudeExecutor", InputTokens: 1_000_000, CacheReadTokens: 250_000, OutputTokens: 100_000, ReasoningTokens: 50_000}, wantTokens: normalizedUsageTokens{Input: 1_000_000, CacheRead: 250_000, Cached: 250_000, Reasoning: 50_000, Output: 100_000}, wantCost: 14_625_000},
+		{name: "Gemini separate reasoning", record: CompletedUsage{Provider: "gemini", InputTokens: 1_000_000, CacheReadTokens: 250_000, OutputTokens: 100_000, ReasoningTokens: 50_000}, wantTokens: normalizedUsageTokens{Input: 750_000, CacheRead: 250_000, Cached: 250_000, Reasoning: 50_000, Output: 100_000}, wantCost: 12_125_000},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			cost, tokens := costBreakdownForUsage(rate, test.record)
+			testRate := rate
+			testRate.ReasoningUsesOutput = test.reasoningUsesOutput
+			cost, tokens := costBreakdownForUsage(testRate, test.record)
 			if tokens != test.wantTokens || cost.Total != test.wantCost {
 				t.Fatalf("tokens=%+v cost=%+v, want tokens=%+v cost=%d", tokens, cost, test.wantTokens, test.wantCost)
+			}
+		})
+	}
+}
+
+func TestCompletedUsageFallbackUsesProviderSpecificNonOverlappingBuckets(t *testing.T) {
+	tests := []struct {
+		name   string
+		record CompletedUsage
+		want   int64
+	}{
+		{name: "OpenAI reasoning stays inside output", record: CompletedUsage{Generate: true, Provider: "openai", InputTokens: 1_000_000, CacheReadTokens: 250_000, OutputTokens: 100_000, ReasoningTokens: 50_000}, want: 1_100_000},
+		{name: "Claude cache and reasoning stay independent", record: CompletedUsage{Generate: true, Provider: "anthropic", InputTokens: 1_000_000, CacheReadTokens: 250_000, OutputTokens: 100_000, ReasoningTokens: 50_000}, want: 1_400_000},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := completedUsageUnits(test.record); got != test.want {
+				t.Fatalf("completedUsageUnits() = %d, want %d", got, test.want)
 			}
 		})
 	}
