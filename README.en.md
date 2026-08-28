@@ -27,6 +27,15 @@ CPA remains responsible for credentials and routing. A Key that has not been add
 - Content-regex blocking is enabled by default with built-in and custom RE2 expressions. Usage trends support hourly, daily, monthly, and yearly views.
 - CPA-host style isolation for inputs, dialogs, tables, themes, and sticky operation columns.
 
+## Content-filter scope
+
+- Case-insensitive RE2 rules cover explicit harmful requests in simplified/traditional Chinese, English, Japanese, Korean, Russian, Spanish, French, German, Portuguese, Italian, Arabic, and Hindi. Coverage varies by language; this is not all-language or all-paraphrase detection.
+- Multilingual rules target license/payment circumvention, credential theft, malware creation, weapons manufacture, sexual exploitation of minors, and self-harm instructions. Additional Chinese/English patterns cover fraud, privacy abuse, harassment, hateful incitement, sexual violence, explicit pornography generation, terrorism, and human trafficking.
+- Face-swap/deepfake rules cover pornographic impersonation, non-consensual nudification, voice/face impersonation scams, and facial/liveness-verification circumvention. Consensual film effects, authorized voice-over, and deepfake detection are not blocked merely by their tool names.
+- Categories reference [OpenAI moderation documentation](https://developers.openai.com/api/docs/guides/moderation) and [cybersecurity checks](https://developers.openai.com/api/docs/guides/safety-checks/cybersecurity). These are locally maintained patterns, not an OpenAI-supplied regex catalog, official moderation service, or complete policy implementation. License circumvention is an additional operator restriction; reverse engineering, decompilation, CTFs, and security research alone are not blocked.
+- New patterns combine sentence-initial requests with concrete harmful targets to reduce false positives. There is no global research/testing exemption. Regex cannot reliably interpret quotations, negation, context, arbitrary obfuscation, or image pixels. Operators can disable individual rules or add custom expressions.
+- On upgrade/restart, new builtins are added without overriding saved global or per-rule switches. Fresh databases default to enabled. Filtering applies only to added Keys, including Track-only Keys; matches return `403` and create dedicated content-block logs. No external moderation calls or request uploads are added.
+
 ## Metering flow
 
 ```mermaid

@@ -10,6 +10,38 @@ import (
 	"testing"
 )
 
+func TestContentFilterComposerStaysOutsideScrollingForm(t *testing.T) {
+	page := panelHTML()
+	// Rule entry must be a fixed flex sibling of the form, not its last row.
+	for _, marker := range []string{
+		`<div id="content-filter-terms" class="content-filter-terms"></div></div><div class="content-filter-composer"><div class="content-filter-add">`,
+		`#content-filter-dialog>.content-filter-composer{box-sizing:border-box!important;flex:0 0 auto!important`,
+		`#content-filter-dialog>.content-filter-composer>.content-filter-add{margin-top:0!important}`,
+		`#content-filter-dialog .content-filter-add{grid-template-columns:minmax(0,1fr) auto!important}`,
+		`#content-filter-dialog #content-filter-value{grid-column:1 / -1!important}`,
+	} {
+		if !strings.Contains(page, marker) {
+			t.Fatalf("content-filter rule entry lost its fixed layout: %q", marker)
+		}
+	}
+}
+
+func TestContentFilterToolbarStaysOutsideScrollingRows(t *testing.T) {
+	page := panelHTML()
+	// Both fixed regions must be outside the only scrolling form, even after embedding.
+	for _, marker := range []string{
+		`<div class="content-filter-toolbar"><label class="content-filter-toggle">`,
+		`<span>操作</span></div></div><div class="form content-filter-form"><div id="content-filter-terms"`,
+		`#content-filter-dialog>.content-filter-toolbar{box-sizing:border-box!important;flex:0 0 auto!important`,
+		`overflow:hidden!important;scrollbar-gutter:stable!important`,
+		`#content-filter-dialog>.content-filter-form{padding:0 18px 18px!important;scrollbar-gutter:stable!important;overscroll-behavior:contain!important}`,
+	} {
+		if !strings.Contains(page, marker) {
+			t.Fatalf("content-filter toolbar lost its fixed layout: %q", marker)
+		}
+	}
+}
+
 func TestPanelUsesDollarBudgetsAndNoAccountPoolUI(t *testing.T) {
 	page := panelHTML()
 	for _, marker := range []string{

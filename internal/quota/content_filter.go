@@ -44,7 +44,7 @@ type ContentFilterMatch struct {
 	Category string `json:"category,omitempty"`
 }
 
-var builtinContentFilterTerms = []ContentFilterTerm{
+var builtinContentFilterTerms = append([]ContentFilterTerm{
 	{ID: "builtin-regex-v1-explosive-instructions-zh", Value: `(如何|怎么|教程|步骤|方法|配方).{0,16}(制作|制造|组装|自制).{0,8}(炸弹|爆炸物|爆炸装置)`, Category: "weapons", Source: contentFilterSourceBuiltin, Enabled: true},
 	{ID: "builtin-regex-v1-explosive-reverse-zh", Value: `(炸弹|爆炸物|爆炸装置).{0,8}(制作|制造|组装|自制).{0,8}(教程|步骤|方法|配方)`, Category: "weapons", Source: contentFilterSourceBuiltin, Enabled: true},
 	{ID: "builtin-regex-v1-firearm-trafficking-zh", Value: `(购买|买到|出售|贩卖|交易).{0,10}(非法|黑市|无证).{0,6}(枪支|枪械|武器)`, Category: "weapons", Source: contentFilterSourceBuiltin, Enabled: true},
@@ -70,13 +70,14 @@ var builtinContentFilterTerms = []ContentFilterTerm{
 	{ID: "builtin-regex-v1-csam-request-en", Value: `\b(download|share|send|sell|buy|give me)\s+(child sexual abuse material|child pornography|csam)(\s+(links?|videos?|images?|sites?))?\b`, Category: "sexual_minors", Source: contentFilterSourceBuiltin, Enabled: true},
 	{ID: "builtin-regex-v1-card-fraud-en", Value: `\b(write|build|create|generate|give me)\s+(a\s+)?(credit card skimmer|carding script|credit card theft tool)\b`, Category: "fraud", Source: contentFilterSourceBuiltin, Enabled: true},
 	{ID: "builtin-regex-v1-phishing-kit-en", Value: `\b(write|build|create|generate|give me)\s+(a\s+)?(phishing kit|credential stealing page|fake login page)(\s+(code|template|script))?\b`, Category: "fraud", Source: contentFilterSourceBuiltin, Enabled: true},
-	{ID: "builtin-regex-v1-malware-code-en", Value: `\b(write|build|create|generate|give me)\s+(a\s+)?(ransomware source code|password stealer|keylogger code|banking trojan|credential stealer)\b`, Category: "malware", Source: contentFilterSourceBuiltin, Enabled: true},
+	// Require a finished malicious artifact, not a detector named after it.
+	{ID: "builtin-regex-v1-malware-code-en", Value: `\b(write|build|create|generate|give me)\s+(a\s+)?(ransomware source code|password stealer|keylogger code|banking trojan|credential stealer)($|[.!?,;]|\s+(that|to)\s)`, Category: "malware", Source: contentFilterSourceBuiltin, Enabled: true},
 	{ID: "builtin-regex-v1-ddos-service-en", Value: `\b(ddos|denial[- ]of[- ]service)\s+(for hire|rental|attack service|service for sale)\b`, Category: "cyber_abuse", Source: contentFilterSourceBuiltin, Enabled: true},
 	{ID: "builtin-regex-v1-unauthorized-intrusion-en", Value: `\b(hack|break into|take over)\s+(someone else's|another person's|an? unauthorized)\s+(account|server|email|phone|website)\b`, Category: "cyber_abuse", Source: contentFilterSourceBuiltin, Enabled: true},
 	{ID: "builtin-regex-v1-hitman-en", Value: `\b(hire|find|pay)\s+(a\s+)?(hitman|assassin)\s+(to\s+)?(kill|murder|eliminate)\b`, Category: "violence", Source: contentFilterSourceBuiltin, Enabled: true},
 	{ID: "builtin-regex-v1-poison-en", Value: `\b(make|prepare|synthesize)\s+(a\s+)?poison\s+to\s+(kill|harm)\b`, Category: "violence", Source: contentFilterSourceBuiltin, Enabled: true},
 	{ID: "builtin-regex-v1-doxxing-en", Value: `\b(find|publish|leak)\s+(someone's|a person's)\s+(home address|phone number|social security number)\s+(to\s+)?(harass|threaten|doxx)\b`, Category: "privacy_abuse", Source: contentFilterSourceBuiltin, Enabled: true},
-}
+}, multilingualContentFilterTerms()...)
 
 type compiledContentFilterTerm struct {
 	expression *regexp.Regexp

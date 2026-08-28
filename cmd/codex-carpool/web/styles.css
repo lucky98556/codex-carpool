@@ -401,6 +401,12 @@ html,body{margin:0;min-height:100%;background:var(--cc-page-bg);color:var(--cc-i
 #key-log-dialog>footer{justify-content:space-between!important;color:var(--cc-muted)!important;font-size:12px!important}
 #key-log-dialog .key-log-pagination{display:flex!important;align-items:center!important;gap:8px!important;min-width:0!important}
 #key-log-dialog .key-log-pagination>span{min-width:74px!important;color:var(--cc-muted)!important;text-align:center!important;white-space:nowrap!important}
+/* Only rule rows scroll; controls and the entry form stay fixed flex siblings.
+ * Reserve the same scrollbar gutter for toolbar and rows to align columns. */
+#content-filter-dialog>.content-filter-toolbar{box-sizing:border-box!important;flex:0 0 auto!important;min-width:0!important;padding:18px 18px 8px!important;overflow:hidden!important;scrollbar-gutter:stable!important;background:var(--cc-card)!important;color:var(--cc-ink)!important}
+#content-filter-dialog>.content-filter-form{padding:0 18px 18px!important;scrollbar-gutter:stable!important;overscroll-behavior:contain!important}
+#content-filter-dialog>.content-filter-composer{box-sizing:border-box!important;flex:0 0 auto!important;min-width:0!important;padding:12px 18px!important;border-top:1px solid var(--cc-line)!important;background:var(--cc-card)!important;color:var(--cc-ink)!important}
+#content-filter-dialog>.content-filter-composer>.content-filter-add{margin-top:0!important}
 #content-filter-dialog label.content-filter-toggle{position:relative!important;display:grid!important;grid-template-columns:minmax(0,1fr) auto!important;align-items:center!important;gap:16px!important;width:100%!important;margin:0!important;padding:14px 15px!important;border:1px solid var(--cc-line)!important;border-radius:12px!important;background:color-mix(in srgb,var(--cc-card) 94%,var(--cc-primary-soft))!important;color:var(--cc-ink)!important;cursor:pointer!important}
 #content-filter-dialog label.content-filter-toggle>input,#content-filter-dialog label.content-filter-term-switch>input{position:absolute!important;width:1px!important;min-width:1px!important;height:1px!important;min-height:1px!important;margin:0!important;padding:0!important;overflow:hidden!important;border:0!important;opacity:0!important;clip-path:inset(50%)!important;pointer-events:none!important}
 #content-filter-dialog .content-filter-toggle-copy{display:block!important;min-width:0!important}
@@ -463,7 +469,9 @@ html,body{margin:0;min-height:100%;background:var(--cc-page-bg);color:var(--cc-i
   #rate-card-dialog .rate-card-table{overflow-x:hidden!important}
   #rate-card-dialog .rate-card-tools{grid-template-columns:1fr!important}
   #rate-card-dialog .rate-sync-bar{align-items:flex-start!important;flex-direction:column!important}
-  #content-filter-dialog .content-filter-add{grid-template-columns:1fr!important}
+  /* Keep the fixed entry area compact so narrow screens retain room for rules. */
+  #content-filter-dialog .content-filter-add{grid-template-columns:minmax(0,1fr) auto!important}
+  #content-filter-dialog #content-filter-value{grid-column:1 / -1!important}
   #content-filter-dialog .content-filter-add button{width:100%!important}
   #content-filter-dialog .content-filter-list-tools{align-items:stretch!important;flex-direction:column!important}
   #content-filter-dialog .content-filter-search{width:100%!important}
