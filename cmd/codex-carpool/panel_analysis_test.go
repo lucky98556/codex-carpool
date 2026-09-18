@@ -92,14 +92,20 @@ func TestPanelUsesDollarBudgetsAndNoAccountPoolUI(t *testing.T) {
 		`<h2>用量管理</h2>`, `<strong>已添加 Key</strong>`,
 		`uiText('已添加 Key','Added Keys')`, `number((state.summary.keys||[]).length)`,
 		`uiText('额度限制','Budget enforced')`, `uiText('仅统计','Track only')`,
-		`启用额度限制`, `仅统计（超额不限制）`,
+		`uiText('禁用','Disabled')`, `key?.disabled?'disabled'`,
+		`启用额度限制`, `仅统计（超额不限制）`, `禁用（拒绝所有模型请求）`,
+		`disabled:mode==='disabled'`, `filter(key=>!status||keyMode(key)===status)`, `.pill.disabled`,
 		`Key 添加后的首个请求分别启动固定 5 小时和 7 天周期，到点整体刷新`,
 		`模型或别名必须在费率设置中存在`,
 		`账本持久化异常，已添加 Key 请求暂停`,
 		`移除 Key`, `uiText('从用量管理中移除此 Key？','Remove this Key from usage management?')`,
 		`uiText('额度设置已保存。','Quota settings saved.')`,
-		`securePrefix='enc::v1::'`, `secureSalt='cli-proxy-api-webui::secure-storage'`,
-		`JSON.parse(decode(raw)||'null')`, `dataset.toastKey`,
+		`credentialKey='codex-carpool:management-key'`, `securePrefix='enc::v1::'`, `secureSalt='codex-carpool::management-key'`,
+		`function storeManagementKey(key)`, `function clearManagementKey()`, `dataset.toastKey`,
+		`id="management-auth-dialog"`, `id="management-auth-key" type="password"`, `id="management-auth-save"`,
+		`function openManagementAuth(message='')`, `async function saveManagementAuth()`,
+		`response.status===401||response.status===403`, `管理密钥错误，请重新输入。`,
+		`['设置 CPA 管理密钥','Set CPA management key']`, `['验证并保存','Validate and save']`,
 		`await loadKeys();openPolicy(null)`,
 		`async function loadKeys(){const payload=await host('/config')`,
 		`uiText('缓存读取','Cache read')`, `uiText('缓存写入','Cache write')`, `uiText('推理','Reasoning')`,
@@ -124,6 +130,11 @@ func TestPanelUsesDollarBudgetsAndNoAccountPoolUI(t *testing.T) {
 	for _, retired := range []string{`official-account-pool`, `account-dialog`, `auth-directory-dialog`, `account-pool`, `五小时倍率`, `allocation_x`, `账号池`, `class="heading page-head"`, `<h1>codex-carpool`, `CPA Key 美元计量 · 全模型费率 · 5 小时与 7 天滚动预算`} {
 		if strings.Contains(page, retired) {
 			t.Fatalf("new panel still contains retired account-pool/x marker %q", retired)
+		}
+	}
+	for _, retired := range []string{`authKey='cli-proxy-auth'`, `legacyKey='managementKey'`, `无法读取 CPAMP 已保存的登录状态`} {
+		if strings.Contains(page, retired) {
+			t.Fatalf("panel still depends on CPAMP login storage %q", retired)
 		}
 	}
 	if strings.Contains(page, `function cycleTokenText(`) || strings.Contains(page, `周期 Token`) {
@@ -172,6 +183,8 @@ func TestPanelUsesProductionStylesAndPreviewSource(t *testing.T) {
 	for _, marker := range []string{
 		`.cc-panel`, `label.search>input`, `position:sticky!important`,
 		`#content-filter-dialog .content-filter-search input`, `#rate-card-dialog`,
+		`#management-auth-dialog{box-sizing:border-box!important`, `#management-auth-dialog::backdrop`,
+		`#management-auth-dialog #management-auth-key`, `#management-auth-dialog>footer button`,
 		`#policy-dialog .policy-models{display:grid!important`,
 		`#policy-dialog .policy-model-item{display:flex!important`,
 		`--cc-primary:#168a67`, `target="_blank" rel="noopener noreferrer"`,

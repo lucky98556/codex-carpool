@@ -42,8 +42,8 @@ type requestContentMessage struct {
 }
 
 // CaptureRequestContent is called by the CPA before-auth interceptor. Parsing
-// is restricted to registered Keys. A disabled policy bypasses enforcement,
-// but its terminal request audit still retains the same bounded user excerpt.
+// is restricted to registered Keys. Track-only and disabled policies retain
+// the same bounded user excerpt for terminal or blocked request auditing.
 func (engine *Engine) CaptureRequestContent(rawAPIKey, model, contentType string, body []byte, now time.Time) string {
 	if engine == nil || len(body) == 0 || engine.admissionsClosed.Load() {
 		return ""

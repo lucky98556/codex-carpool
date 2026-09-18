@@ -16,6 +16,7 @@ type KeySnapshot struct {
 	FingerprintPrefix string              `json:"fingerprint_prefix"`
 	KeySuffix         string              `json:"key_suffix,omitempty"`
 	Enabled           bool                `json:"enabled"`
+	Disabled          bool                `json:"disabled"`
 	AllowedModels     []string            `json:"allowed_models"`
 	FiveHourBudgetUSD float64             `json:"five_hour_budget_usd"`
 	SevenDayBudgetUSD float64             `json:"seven_day_budget_usd"`
@@ -195,7 +196,7 @@ func (engine *Engine) Summary(now time.Time) SummarySnapshot {
 		}
 		keys = append(keys, KeySnapshot{
 			ID: policy.ID, Name: policy.Name, FingerprintPrefix: fingerprint,
-			KeySuffix: policy.KeySuffix, Enabled: policy.Enabled,
+			KeySuffix: policy.KeySuffix, Enabled: policy.Enabled, Disabled: policy.Disabled,
 			AllowedModels:     append([]string(nil), policy.AllowedModels...),
 			FiveHourBudgetUSD: policy.FiveHourBudgetUSD, SevenDayBudgetUSD: policy.SevenDayBudgetUSD,
 			AccessRules: append([]AccessRule(nil), policy.AccessRules...), AccessTimezone: policy.AccessTimezone,
@@ -273,7 +274,9 @@ func (engine *Engine) UpsertPolicy(policy KeyPolicy, rawAPIKey string) (KeyPolic
 		engine.policiesMu.Unlock()
 		return KeyPolicy{}, err
 	}
-	if len(validated.AllowedModels) > 0 {
+	// Disabled blocks every model before routing. Preserve its saved allowlist so
+	// the operator can restore it later; validate again when access is re-enabled.
+	if !validated.Disabled && len(validated.AllowedModels) > 0 {
 		catalog, catalogErr := engine.store.ListModelCatalog()
 		if catalogErr != nil {
 			engine.policiesMu.Unlock()

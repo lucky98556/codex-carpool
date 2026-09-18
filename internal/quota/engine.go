@@ -571,6 +571,9 @@ func (engine *Engine) admit(rawAPIKey, model, captureID string, now time.Time, c
 		// all follow that requested name when it is available.
 		model = captured.Model
 	}
+	if policy.Disabled {
+		return engine.blockAdmission(keyID, "", model, captured.Content, now, "key_disabled", "This API key is disabled", httpStatusForbidden, ContentFilterMatch{})
+	}
 	if captured.Match.Matched {
 		return engine.blockAdmission(keyID, "", model, captured.Content, now, "content_forbidden", "The request matched a content-blocking expression", httpStatusForbidden, captured.Match)
 	}
@@ -595,8 +598,8 @@ func (engine *Engine) admit(rawAPIKey, model, captureID string, now time.Time, c
 		return engine.blockAdmission(keyID, "", model, captured.Content, now, "quota_persistence_unavailable", "quota accounting storage is temporarily unavailable", httpStatusServiceUnavailable, ContentFilterMatch{})
 	}
 	if !policy.Enabled {
-		// A registered Key always stays in the metering pipeline. Disabled only
-		// skips dollar-budget rejection and leaves CPA's normal routing untouched.
+		// A Track-only Key stays in the metering pipeline. This mode skips only
+		// dollar-budget rejection and leaves CPA's normal routing untouched.
 		marker := pendingRequest{KeyID: keyID, Model: model, Content: captured.Content, RequestedAt: now.UTC(), Rate: rate}
 		if !engine.addPendingRequest(marker) {
 			return engine.blockAdmission(keyID, "", model, captured.Content, now, "quota_persistence_unavailable", "too many requests are awaiting terminal usage", httpStatusServiceUnavailable, ContentFilterMatch{})
@@ -858,8 +861,10 @@ func (engine *Engine) RecordUsage(record CompletedUsage) {
 	} else if record.Failed {
 		decision, reason, status = "failed", "upstream_failed_with_actual_usage", record.FailureStatus
 	}
-	if !policy.Enabled {
-		reason += "_after_policy_disabled"
+	if policy.Disabled {
+		// A request admitted just before the operator disabled the Key may still
+		// receive its terminal CPA callback; preserve that actual result in logs.
+		reason += "_after_key_disabled"
 	}
 	if status < 0 {
 		status = 0

@@ -38,9 +38,9 @@ type storedInstallationSettings struct {
 }
 
 // KeyPolicy governs one downstream CPA API Key. Enabled controls only fixed-cycle
-// dollar-budget rejection; every registered Key remains fully metered. Empty
-// model selection means all CPA-synchronized models, and a zero budget means
-// that window is unlimited.
+// dollar-budget rejection. Disabled rejects every model before routing while
+// retaining the bounded request audit. Empty model selection means all
+// CPA-synchronized models, and a zero budget means that window is unlimited.
 type KeyPolicy struct {
 	ID                string       `yaml:"id" json:"id"`
 	Name              string       `yaml:"name" json:"name"`
@@ -52,6 +52,7 @@ type KeyPolicy struct {
 	AccessRules       []AccessRule `yaml:"access_rules" json:"access_rules"`
 	AccessTimezone    string       `yaml:"access_timezone" json:"access_timezone"`
 	Enabled           bool         `yaml:"enabled" json:"enabled"`
+	Disabled          bool         `yaml:"disabled" json:"disabled"`
 }
 
 // RuntimeConfig is the validated immutable/startup view used by the engine.

@@ -110,7 +110,7 @@ func TestCapturedRequestContentFollowsTerminalUsageLog(t *testing.T) {
 	}
 }
 
-func TestDisabledRegisteredKeyKeepsFullAccountingWithoutBudgetRejection(t *testing.T) {
+func TestTrackOnlyRegisteredKeyKeepsFullAccountingWithoutBudgetRejection(t *testing.T) {
 	engine := newTestEngine(t, KeyPolicy{ID: "managed", Name: "Managed", Enabled: false, FiveHourBudgetUSD: 0.5, SevenDayBudgetUSD: 0.5, AllowedModels: []string{"gpt-5"}})
 	defer func() { _ = engine.Close() }()
 	now := time.Now().UTC().Truncate(time.Second)
@@ -119,44 +119,63 @@ func TestDisabledRegisteredKeyKeepsFullAccountingWithoutBudgetRejection(t *testi
 	}
 	captureID := engine.CaptureRequestContent("managed-key", "gpt-5", "application/json", []byte(`{"prompt":"暂停也记录"}`), now)
 	if admission := engine.AdmitCaptured("managed-key", "gpt-5", captureID, now); !admission.Bypass {
-		t.Fatalf("disabled admission = %+v", admission)
+		t.Fatalf("track-only admission = %+v", admission)
 	}
 	engine.RecordUsage(CompletedUsage{APIKey: "managed-key", AuthID: "account-a", Model: "gpt-5", RequestedAt: now, Generate: true, InputTokens: 100_000, OutputTokens: 20_000, TotalTokens: 120_000})
 	logs, err := engine.DecisionLogs("managed", 10)
 	if err != nil || len(logs) != 1 || logs[0].RequestContent != "暂停也记录" || logs[0].CostMicros != 1_400_000 {
-		t.Fatalf("disabled audit = %+v, err=%v", logs, err)
+		t.Fatalf("track-only audit = %+v, err=%v", logs, err)
 	}
 	if spend := engine.Summary(now).Keys[0].DollarSpend; spend.FiveHour.SpentUSD != 1.4 || spend.SevenDay.SpentUSD != 1.4 || spend.FiveHour.CoolingUntil == nil || spend.SevenDay.CoolingUntil == nil ||
 		spend.FiveHour.RefreshAt == nil || !spend.FiveHour.RefreshAt.Equal(now.Add(fiveHourWindow)) || spend.SevenDay.RefreshAt == nil || !spend.SevenDay.RefreshAt.Equal(now.Add(sevenDayWindow)) {
-		t.Fatalf("disabled Key dollar windows = %+v, want full $1.40 accounting", spend)
+		t.Fatalf("track-only Key dollar windows = %+v, want full $1.40 accounting", spend)
 	}
 	records, err := engine.UsageRecords("managed", 10)
 	if err != nil || len(records) != 1 || records[0].Units != 120_000 || records[0].InputTokens != 100_000 || records[0].OutputTokens != 20_000 {
-		t.Fatalf("disabled Key usage records = %+v, err=%v", records, err)
+		t.Fatalf("track-only Key usage records = %+v, err=%v", records, err)
 	}
 	analysis, err := engine.UsageAnalysis("managed", now.Add(-time.Hour), now.Add(time.Hour), time.UTC, "hour")
 	if err != nil || analysis.TotalTokens != 120_000 || analysis.RequestCount != 1 || analysis.InputTokens != 100_000 || analysis.OutputTokens != 20_000 || analysis.CostMicros != 1_400_000 {
-		t.Fatalf("disabled Key usage analysis = %+v, err=%v", analysis, err)
+		t.Fatalf("track-only Key usage analysis = %+v, err=%v", analysis, err)
 	}
 	if err := engine.flushPending(); err != nil {
-		t.Fatalf("flush disabled Key accounting = %v", err)
+		t.Fatalf("flush track-only Key accounting = %v", err)
 	}
 	summary, err := engine.SummaryWithActualTokens(now.Add(time.Second))
 	if err != nil || len(summary.Keys) != 1 || summary.Keys[0].ActualTokens.Total != 120_000 || summary.Keys[0].ActualTokens.Input != 100_000 || summary.Keys[0].ActualTokens.Output != 20_000 {
-		t.Fatalf("disabled Key actual Token totals = %+v, err=%v", summary.Keys, err)
+		t.Fatalf("track-only Key actual Token totals = %+v, err=%v", summary.Keys, err)
 	}
 	if admission := engine.Admit("managed-key", "gpt-5", now.Add(time.Second)); !admission.Bypass || admission.Code != "" {
-		t.Fatalf("disabled Key after budget exhaustion = %+v, want unblocked CPA routing", admission)
+		t.Fatalf("track-only Key after budget exhaustion = %+v, want unblocked CPA routing", admission)
 	}
 	if admission := engine.Admit("managed-key", "gpt-4", now.Add(2*time.Second)); admission.Bypass || admission.Code != "model_not_allowed" {
-		t.Fatalf("disabled Key model restriction = %+v, want model_not_allowed", admission)
+		t.Fatalf("track-only Key model restriction = %+v, want model_not_allowed", admission)
 	}
 }
 
-func TestDisabledRegisteredKeyStillRequiresConfiguredModelRate(t *testing.T) {
+func TestTrackOnlyRegisteredKeyStillRequiresConfiguredModelRate(t *testing.T) {
 	engine := newTestEngine(t, KeyPolicy{ID: "managed", Name: "Managed", Enabled: false})
 	defer func() { _ = engine.Close() }()
 	if admission := engine.Admit("managed-key", "unpriced-model", time.Now().UTC()); admission.Bypass || admission.Code != "model_rate_not_configured" {
-		t.Fatalf("disabled Key missing-rate gate = %+v, want model_rate_not_configured", admission)
+		t.Fatalf("track-only Key missing-rate gate = %+v, want model_rate_not_configured", admission)
+	}
+}
+
+func TestFullyDisabledKeyBlocksEveryModelAndKeepsRequestLog(t *testing.T) {
+	engine := newTestEngine(t, KeyPolicy{ID: "managed", Name: "Managed", Enabled: true, Disabled: true})
+	defer func() { _ = engine.Close() }()
+	now := time.Now().UTC().Truncate(time.Second)
+	captureID := engine.CaptureRequestContent("managed-key", "any-unconfigured-model", "application/json", []byte(`{"prompt":"禁用后也要记录"}`), now)
+	admission := engine.AdmitCaptured("managed-key", "any-unconfigured-model", captureID, now)
+	if admission.Allowed || admission.Bypass || admission.Code != "key_disabled" || admission.KeyID != "managed" {
+		t.Fatalf("fully disabled admission = %+v, want key_disabled", admission)
+	}
+	logs, err := engine.DecisionLogs("managed", 10)
+	if err != nil || len(logs) != 1 {
+		t.Fatalf("fully disabled request logs = %+v, err=%v", logs, err)
+	}
+	log := logs[0]
+	if log.Decision != "blocked" || log.StatusCode != 403 || log.Reason != "key_disabled" || log.Model != "any-unconfigured-model" || log.RequestContent != "禁用后也要记录" {
+		t.Fatalf("fully disabled request log = %+v", log)
 	}
 }

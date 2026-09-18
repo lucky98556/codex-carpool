@@ -188,6 +188,7 @@ CREATE TABLE IF NOT EXISTS key_policies (
   access_rules TEXT NOT NULL DEFAULT '[]',
   access_timezone TEXT NOT NULL DEFAULT 'UTC',
   enabled INTEGER NOT NULL DEFAULT 1,
+  disabled INTEGER NOT NULL DEFAULT 0,
   created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL
 );
@@ -316,9 +317,10 @@ CREATE INDEX IF NOT EXISTS idx_filter_normalized ON content_filter_terms(normali
 `); err != nil {
 		return fmt.Errorf("create current quota schema: %w", err)
 	}
-	// Additive columns keep an existing installation usable while the complete
-	// rate profile moves beyond the former single cached-input price.
+	// Additive columns keep existing installations usable as policy state and
+	// the rate profile gain fields.
 	for _, column := range []struct{ table, name, definition string }{
+		{"key_policies", "disabled", "INTEGER NOT NULL DEFAULT 0"},
 		{"model_rates", "profile_json", "TEXT NOT NULL DEFAULT ''"},
 		{"pending_request_markers", "rate_profile_json", "TEXT NOT NULL DEFAULT ''"},
 	} {
@@ -451,22 +453,22 @@ func (store *Store) insertPolicy(policy KeyPolicy, ignore bool) (sql.Result, err
 	store.mu.Lock()
 	defer store.mu.Unlock()
 	if ignore {
-		return store.db.Exec(`INSERT OR IGNORE INTO key_policies(key_id,name,key_sha256,key_suffix,five_hour_budget_usd,seven_day_budget_usd,allowed_models,access_rules,access_timezone,enabled,created_at,updated_at)
-VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`, validated.ID, validated.Name, validated.KeySHA256, validated.KeySuffix, validated.FiveHourBudgetUSD,
-			validated.SevenDayBudgetUSD, string(models), string(rules), validated.AccessTimezone, boolToInt(validated.Enabled), now, now)
+		return store.db.Exec(`INSERT OR IGNORE INTO key_policies(key_id,name,key_sha256,key_suffix,five_hour_budget_usd,seven_day_budget_usd,allowed_models,access_rules,access_timezone,enabled,disabled,created_at,updated_at)
+VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)`, validated.ID, validated.Name, validated.KeySHA256, validated.KeySuffix, validated.FiveHourBudgetUSD,
+			validated.SevenDayBudgetUSD, string(models), string(rules), validated.AccessTimezone, boolToInt(validated.Enabled), boolToInt(validated.Disabled), now, now)
 	}
-	return store.db.Exec(`INSERT INTO key_policies(key_id,name,key_sha256,key_suffix,five_hour_budget_usd,seven_day_budget_usd,allowed_models,access_rules,access_timezone,enabled,created_at,updated_at)
-VALUES(?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(key_id) DO UPDATE SET name=excluded.name,key_sha256=excluded.key_sha256,key_suffix=excluded.key_suffix,
+	return store.db.Exec(`INSERT INTO key_policies(key_id,name,key_sha256,key_suffix,five_hour_budget_usd,seven_day_budget_usd,allowed_models,access_rules,access_timezone,enabled,disabled,created_at,updated_at)
+VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(key_id) DO UPDATE SET name=excluded.name,key_sha256=excluded.key_sha256,key_suffix=excluded.key_suffix,
 five_hour_budget_usd=excluded.five_hour_budget_usd,seven_day_budget_usd=excluded.seven_day_budget_usd,allowed_models=excluded.allowed_models,
-access_rules=excluded.access_rules,access_timezone=excluded.access_timezone,enabled=excluded.enabled,updated_at=excluded.updated_at`,
+access_rules=excluded.access_rules,access_timezone=excluded.access_timezone,enabled=excluded.enabled,disabled=excluded.disabled,updated_at=excluded.updated_at`,
 		validated.ID, validated.Name, validated.KeySHA256, validated.KeySuffix, validated.FiveHourBudgetUSD, validated.SevenDayBudgetUSD,
-		string(models), string(rules), validated.AccessTimezone, boolToInt(validated.Enabled), now, now)
+		string(models), string(rules), validated.AccessTimezone, boolToInt(validated.Enabled), boolToInt(validated.Disabled), now, now)
 }
 
 func (store *Store) LoadPolicies() ([]KeyPolicy, error) {
 	store.mu.Lock()
 	defer store.mu.Unlock()
-	rows, err := store.db.Query(`SELECT key_id,name,key_sha256,key_suffix,five_hour_budget_usd,seven_day_budget_usd,allowed_models,access_rules,access_timezone,enabled FROM key_policies ORDER BY key_id`)
+	rows, err := store.db.Query(`SELECT key_id,name,key_sha256,key_suffix,five_hour_budget_usd,seven_day_budget_usd,allowed_models,access_rules,access_timezone,enabled,disabled FROM key_policies ORDER BY key_id`)
 	if err != nil {
 		return nil, err
 	}
@@ -475,12 +477,13 @@ func (store *Store) LoadPolicies() ([]KeyPolicy, error) {
 	for rows.Next() {
 		var policy KeyPolicy
 		var models, rules string
-		var enabled int
+		var enabled, disabled int
 		if err := rows.Scan(&policy.ID, &policy.Name, &policy.KeySHA256, &policy.KeySuffix, &policy.FiveHourBudgetUSD,
-			&policy.SevenDayBudgetUSD, &models, &rules, &policy.AccessTimezone, &enabled); err != nil {
+			&policy.SevenDayBudgetUSD, &models, &rules, &policy.AccessTimezone, &enabled, &disabled); err != nil {
 			return nil, err
 		}
 		policy.Enabled = enabled != 0
+		policy.Disabled = disabled != 0
 		if err := json.Unmarshal([]byte(models), &policy.AllowedModels); err != nil {
 			return nil, fmt.Errorf("decode allowed models for %q: %w", policy.ID, err)
 		}

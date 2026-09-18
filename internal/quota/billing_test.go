@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 	"time"
 )
@@ -37,6 +38,49 @@ INSERT INTO model_rates VALUES('legacy-model',1000000,250000,4000000,0);`); err 
 	}
 	if len(rates) != 1 || rates[0].CacheReadUSDPerMillion != .25 || rates[0].CacheWriteUSDPerMillion != .25 || !rates[0].ReasoningUsesOutput {
 		t.Fatalf("migrated rates = %+v", rates)
+	}
+}
+
+func TestOpenStoreAddsAndPersistsDisabledKeyState(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("native plugin database lock is Linux-only")
+	}
+	path := filepath.Join(t.TempDir(), "legacy-policy.db")
+	db, err := sql.Open("sqlite3", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`CREATE TABLE key_policies (
+key_id TEXT PRIMARY KEY,name TEXT NOT NULL,key_sha256 TEXT NOT NULL UNIQUE,key_suffix TEXT NOT NULL DEFAULT '',
+five_hour_budget_usd REAL NOT NULL DEFAULT 0,seven_day_budget_usd REAL NOT NULL DEFAULT 0,allowed_models TEXT NOT NULL DEFAULT '[]',
+access_rules TEXT NOT NULL DEFAULT '[]',access_timezone TEXT NOT NULL DEFAULT 'UTC',enabled INTEGER NOT NULL DEFAULT 1,
+created_at INTEGER NOT NULL,updated_at INTEGER NOT NULL);`); err != nil {
+		_ = db.Close()
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	store, err := OpenStore(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	policy := KeyPolicy{ID: "disabled", Name: "Disabled", KeySHA256: strings.Repeat("a", 64), Enabled: true, Disabled: true}
+	if err := store.UpsertPolicy(policy); err != nil {
+		_ = store.Close()
+		t.Fatal(err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	store, err = OpenStore(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = store.Close() }()
+	policies, err := store.LoadPolicies()
+	if err != nil || len(policies) != 1 || !policies[0].Disabled || !policies[0].Enabled {
+		t.Fatalf("reopened disabled policy = %+v, err=%v", policies, err)
 	}
 }
 

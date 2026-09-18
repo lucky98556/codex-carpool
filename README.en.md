@@ -10,7 +10,7 @@
 
 ## Overview
 
-`codex-carpool` owns only actual usage and USD budgets for Keys added to Usage Management. It does not maintain an account pool, read official percentage snapshots, or use multiplier/point accounting. Request excerpts, models, Tokens, cost, and both fixed cycles are recorded in both **Budget enforced** and **Track only** modes; the only difference is whether an over-budget request returns `429`.
+`codex-carpool` owns only actual usage and USD budgets for Keys added to Usage Management. It does not maintain an account pool, read official percentage snapshots, or use multiplier/point accounting. Request excerpts, models, Tokens, cost, and both fixed cycles are recorded in both **Budget enforced** and **Track only** modes; the only difference is whether an over-budget request returns `429`. **Disabled** rejects every model request for the Key while retaining its request log.
 
 CPA remains responsible for credentials and routing. A Key that has not been added keeps CPA's normal behavior. External traffic is ignored and can never be attributed to an added Key.
 
@@ -24,6 +24,7 @@ CPA remains responsible for credentials and routing. A Key that has not been add
 - Terminal CPA usage settlement normalizes input, cache reads, cache writes, output, reasoning, and service tier for Codex/OpenAI, Claude/Anthropic, and Gemini before calculating USD. A requested model alias uses that alias's manually configured rate.
 - If CPA reports no actual Tokens, the request is recorded as incomplete with zero Token and USD usage; no fixed estimate is substituted.
 - A registered Key in Track-only mode still records request excerpts, models, input/cache/output Tokens, USD cost, CPA AuthID, and both fixed cycles; over-budget requests continue.
+- A Disabled Key returns `403` before model, rate, and CPA routing. No model Tokens or cost are produced, while the Key, model, bounded request excerpt, and rejection reason remain in request logs.
 - Content-regex blocking is enabled by default with built-in and custom RE2 expressions. Usage trends support hourly, daily, monthly, and yearly views.
 - CPA-host style isolation for inputs, dialogs, tables, themes, and sticky operation columns.
 
@@ -122,7 +123,7 @@ Remove older shared libraries with the same plugin name before restarting CPA. K
 1. Open `/v0/resource/plugins/codex-carpool/panel` in CPAMP.
 2. Click **Sync CPA Keys and models**.
 3. Open **Rate settings** and either maintain the complete prices manually or enable models.dev price synchronization. Unmatched aliases remain manually configurable.
-4. Add a Key, select its allowed models, and set 5-hour and 7-day USD budgets. Blank or `0` means unlimited. Track-only mode still calculates all windows and cost but does not reject over-budget traffic.
+4. Add a Key, select its state and allowed models, and set 5-hour and 7-day USD budgets. Blank or `0` means unlimited. Track-only mode still calculates all windows and cost but does not reject over-budget traffic; Disabled rejects every model request while retaining request logs.
 5. Verify Token and USD settlement in usage logs; runtime logs record synchronization, rate saves, and settlement events.
 
 ## Management routes
@@ -149,6 +150,7 @@ Remove older shared libraries with the same plugin name before restarting CPA. K
 - Reaching either USD window returns `429` until the window recovers.
 - A terminal callback creates matching input/cache/output Token and USD records.
 - A registered Track-only Key still applies content, schedule, model, and rate checks and accumulates Tokens, cost, and both windows; only over-budget rejection is skipped.
+- A Disabled Key returns `403` for every model while its request log retains the Key, model, request excerpt, and `key_disabled` reason.
 - External traffic never appears in managed-Key statistics.
 - Rates, policies, dollar ledgers, and logs survive a CPA restart.
 

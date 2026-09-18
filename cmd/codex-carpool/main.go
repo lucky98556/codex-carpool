@@ -282,6 +282,8 @@ func localizedAdmissionMessage(language, code, fallback string) string {
 		chinese, english = "当前时间不在此 Key 允许访问的时段内。", "The current time is outside this API Key's allowed access schedule."
 	case "model_not_allowed":
 		chinese, english = "此 Key 不允许使用所请求的模型。", "This API Key is not allowed to use the requested model."
+	case "key_disabled":
+		chinese, english = "此 Key 已禁用，无法访问任何模型。", "This API Key is disabled and cannot access any model."
 	case "model_rate_not_configured":
 		chinese, english = "所请求模型尚未配置费率。", "The requested model has no configured rate."
 	case "key_dollar_budget_exhausted":
@@ -513,7 +515,7 @@ func handleMethod(method string, request []byte) ([]byte, error) {
 				{Method: http.MethodGet, Path: "/" + pluginName + "/summary", Description: "Returns Key dollar budgets, settled spend, and Token usage counters."},
 				{Method: http.MethodGet, Path: "/" + pluginName + "/keys", Description: "Lists downstream API Key policies without secrets."},
 				{Method: http.MethodPost, Path: "/" + pluginName + "/keys", Description: "Creates a five-hour and seven-day dollar budget policy for a CPA API Key."},
-				{Method: http.MethodPut, Path: "/" + pluginName + "/keys", Description: "Updates a Key dollar budget, remark, or budget-enforcement state."},
+				{Method: http.MethodPut, Path: "/" + pluginName + "/keys", Description: "Updates a Key dollar budget, remark, or access state."},
 				{Method: http.MethodDelete, Path: "/" + pluginName + "/keys", Description: "Deletes one Key policy and its plugin-owned history."},
 				{Method: http.MethodPost, Path: "/" + pluginName + "/keys/reset", Description: "Resets one Key's plugin-owned usage while preserving its policy."},
 				{Method: http.MethodGet, Path: "/" + pluginName + "/records", Description: "Lists compact usage buckets for one Key."},
@@ -1092,7 +1094,7 @@ func errorEnvelope(code, message string) []byte {
 // real HTTP 429 rather than an indistinguishable scheduler failure.
 func admissionStatusCode(code string) int {
 	switch code {
-	case "model_not_allowed", "access_schedule_closed", "content_forbidden":
+	case "model_not_allowed", "key_disabled", "access_schedule_closed", "content_forbidden":
 		return http.StatusForbidden
 	case "quota_scheduler_candidates_required", "quota_unavailable", "quota_persistence_unavailable", "model_rate_not_configured":
 		// SQLite/accounting recovery is a temporary plugin outage, never a

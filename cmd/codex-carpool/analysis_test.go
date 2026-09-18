@@ -110,6 +110,12 @@ func TestAdmissionErrorsAreLocalizedWithoutChangingTheirStableCode(t *testing.T)
 	if got := localizedAdmissionMessage("en", "model_not_allowed", "ignored"); got != "This API Key is not allowed to use the requested model." {
 		t.Fatalf("English model message = %q", got)
 	}
+	if got := localizedAdmissionMessage("zh", "key_disabled", "ignored"); got != "此 Key 已禁用，无法访问任何模型。" {
+		t.Fatalf("Chinese disabled-Key message = %q", got)
+	}
+	if got := admissionStatusCode("key_disabled"); got != http.StatusForbidden {
+		t.Fatalf("disabled-Key HTTP status = %d, want 403", got)
+	}
 	if got := localizedAdmissionMessage("zh", "unknown_code", "original English detail"); got != "请求暂时无法处理，请稍后重试。" {
 		t.Fatalf("Chinese unknown fallback = %q", got)
 	}
