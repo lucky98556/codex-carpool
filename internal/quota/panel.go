@@ -11,19 +11,21 @@ import (
 const usageAnalysisQueryTimeout = 5 * time.Second
 
 type KeySnapshot struct {
-	ID                string              `json:"id"`
-	Name              string              `json:"name"`
-	FingerprintPrefix string              `json:"fingerprint_prefix"`
-	KeySuffix         string              `json:"key_suffix,omitempty"`
-	Enabled           bool                `json:"enabled"`
-	Disabled          bool                `json:"disabled"`
-	AllowedModels     []string            `json:"allowed_models"`
-	FiveHourBudgetUSD float64             `json:"five_hour_budget_usd"`
-	SevenDayBudgetUSD float64             `json:"seven_day_budget_usd"`
-	AccessRules       []AccessRule        `json:"access_rules"`
-	AccessTimezone    string              `json:"access_timezone"`
-	DollarSpend       DollarSpendSnapshot `json:"dollar_spend"`
-	ActualTokens      ActualTokenSnapshot `json:"actual_tokens"`
+	ID                 string              `json:"id"`
+	Name               string              `json:"name"`
+	FingerprintPrefix  string              `json:"fingerprint_prefix"`
+	KeySuffix          string              `json:"key_suffix,omitempty"`
+	Enabled            bool                `json:"enabled"`
+	Disabled           bool                `json:"disabled"`
+	AllowedModels      []string            `json:"allowed_models"`
+	FiveHourBudgetUSD  float64             `json:"five_hour_budget_usd"`
+	SevenDayBudgetUSD  float64             `json:"seven_day_budget_usd"`
+	AccessRules        []AccessRule        `json:"access_rules"`
+	AccessTimezone     string              `json:"access_timezone"`
+	IPWhitelist        []string            `json:"ip_whitelist"`
+	IPWhitelistEnabled bool                `json:"ip_whitelist_enabled"`
+	DollarSpend        DollarSpendSnapshot `json:"dollar_spend"`
+	ActualTokens       ActualTokenSnapshot `json:"actual_tokens"`
 }
 
 type ActualTokenSnapshot struct {
@@ -200,6 +202,7 @@ func (engine *Engine) Summary(now time.Time) SummarySnapshot {
 			AllowedModels:     append([]string(nil), policy.AllowedModels...),
 			FiveHourBudgetUSD: policy.FiveHourBudgetUSD, SevenDayBudgetUSD: policy.SevenDayBudgetUSD,
 			AccessRules: append([]AccessRule(nil), policy.AccessRules...), AccessTimezone: policy.AccessTimezone,
+			IPWhitelist: append([]string(nil), policy.IPWhitelist...), IPWhitelistEnabled: policy.IPWhitelistEnabled,
 			DollarSpend: engine.dollarSpendSnapshot(policy, now),
 		})
 	}
@@ -269,6 +272,11 @@ func (engine *Engine) UpsertPolicy(policy KeyPolicy, rawAPIKey string) (KeyPolic
 		policy.KeySHA256 = existing.KeySHA256
 		policy.KeySuffix = existing.KeySuffix
 	}
+	if exists && policy.IPWhitelist == nil {
+		// Quota edits omit this independently managed setting.
+		policy.IPWhitelist = existing.IPWhitelist
+		policy.IPWhitelistEnabled = existing.IPWhitelistEnabled
+	}
 	validated, err := normalizePolicy(policy)
 	if err != nil {
 		engine.policiesMu.Unlock()
@@ -310,6 +318,31 @@ func (engine *Engine) UpsertPolicy(policy KeyPolicy, rawAPIKey string) (KeyPolic
 	return validated, nil
 }
 
+// UpdatePolicyIPWhitelist changes only the independent source-IP gate.
+func (engine *Engine) UpdatePolicyIPWhitelist(keyID string, entries []string, enabled bool) (KeyPolicy, error) {
+	if engine == nil {
+		return KeyPolicy{}, fmt.Errorf("codex-carpool is not initialized")
+	}
+	engine.adminMu.Lock()
+	defer engine.adminMu.Unlock()
+	engine.policiesMu.Lock()
+	defer engine.policiesMu.Unlock()
+	policy, exists := engine.policiesByID[strings.TrimSpace(keyID)]
+	if !exists {
+		return KeyPolicy{}, fmt.Errorf("key policy %q was not found", keyID)
+	}
+	policy.IPWhitelist, policy.IPWhitelistEnabled = entries, enabled
+	validated, err := normalizePolicy(policy)
+	if err != nil {
+		return KeyPolicy{}, err
+	}
+	if err := engine.store.UpsertPolicy(validated); err != nil {
+		return KeyPolicy{}, err
+	}
+	engine.policiesByID[validated.ID] = validated
+	return validated, nil
+}
+
 func (engine *Engine) pendingRequestsForKey(keyID string) int {
 	engine.pendingMu.Lock()
 	defer engine.pendingMu.Unlock()
@@ -320,6 +353,19 @@ func (engine *Engine) pendingRequestsForKey(keyID string) int {
 		}
 	}
 	return count
+}
+
+// MissingAllowedModelsError carries only operator-selected model IDs, never
+// low-level catalog or storage details, for a useful management validation hint.
+type MissingAllowedModelsError struct {
+	Models []string
+}
+
+func (err *MissingAllowedModelsError) Error() string {
+	if len(err.Models) == 0 {
+		return "model is not in the synchronized CPA model catalog; sync models and retry"
+	}
+	return fmt.Sprintf("model %q is not in the synchronized CPA model catalog; sync models and retry", err.Models[0])
 }
 
 func validateAllowedModels(allowed []string, catalog []ModelCatalogEntry) error {
@@ -335,10 +381,14 @@ func validateAllowedModels(allowed []string, catalog []ModelCatalogEntry) error 
 	if len(known) == 0 {
 		return fmt.Errorf("synchronized CPA model catalog is empty; sync models before applying a restriction")
 	}
+	missing := make([]string, 0)
 	for _, model := range allowed {
 		if _, exists := known[model]; !exists {
-			return fmt.Errorf("model %q is not in the synchronized CPA model catalog; sync models and retry", model)
+			missing = append(missing, model)
 		}
+	}
+	if len(missing) > 0 {
+		return &MissingAllowedModelsError{Models: missing}
 	}
 	return nil
 }

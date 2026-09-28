@@ -48,6 +48,12 @@ func TestPanelUsesDollarBudgetsAndNoAccountPoolUI(t *testing.T) {
 		`id="five-hour-budget"`, `id="seven-day-budget"`, `id="rate-card-dialog"`,
 		`id="allowed-models-list"`, `id="allowed-models-search"`, `id="allowed-models-all"`,
 		`id="access-limited"`, `id="access-rule-list"`, `id="access-rule-add"`,
+		`id="key-detail-ip-whitelist"`, `id="ip-whitelist-dialog"`,
+		`id="ip-whitelist-enabled" type="checkbox" role="switch"`, `id="ip-whitelist" rows="3"`,
+		`ip_whitelist:entries,ip_whitelist_enabled:enabled`, `api('/keys/ip-whitelist'`,
+		`#ip-whitelist-dialog[open]`, `#ip-whitelist-dialog>header`, `#ip-whitelist-dialog>.form`, `#ip-whitelist-dialog>footer`,
+		`#ip-whitelist-dialog .ip-whitelist-toggle input{position:absolute!important;width:1px!important;min-width:1px!important`,
+		`#ip-whitelist-dialog #ip-whitelist{box-sizing:border-box!important`,
 		`input_usd_per_million`, `cache_read_usd_per_million`, `cache_write_usd_per_million`, `reasoning_usd_per_million`, `output_usd_per_million`,
 		`id="rate-sync-toggle" role="switch"`, `models.dev 价格同步`, `async function toggleRateSync()`,
 		`function enabledCPAAuthEntries(payload)`, `host('/auth-files')`,
@@ -112,6 +118,7 @@ func TestPanelUsesDollarBudgetsAndNoAccountPoolUI(t *testing.T) {
 		`existing?.source==='models.dev'&&state.rateSync?.enabled`,
 		`rates.push({...existing,...edited,source:'manual',provider:'',tiers:[],modes:[]`, `if(unchanged){rates.push(existing);return}`,
 		`async function followRequestedRateSync(previousAttempt)`, `rateSyncFollowupGeneration`, `state.rateSync?.last_attempt`,
+		`rates.some(rate=>!previousRateIDs.has(value(rate.model)))`,
 		`sync.retired_models||0`, `uiText('匹配 / 未匹配 / 已移除：'`,
 		`function renderRateCapabilityNotice()`, `service_tier 为 auto 或未知时使用基础价`,
 		`id="rate-card-search"`, `id="rate-card-status-filter"`, `id="rate-card-filter-empty"`,
@@ -178,6 +185,20 @@ func TestPanelUsesDollarBudgetsAndNoAccountPoolUI(t *testing.T) {
 	}
 }
 
+func TestIPWhitelistButtonPrecedesQuotaEditorAndUsesSeparateDialog(t *testing.T) {
+	page := panelHTML()
+	button := strings.Index(page, `id="key-detail-ip-whitelist"`)
+	quotaButton := strings.Index(page, `id="key-detail-edit"`)
+	quotaDialog := strings.Index(page, `<dialog id="policy-dialog"`)
+	ipDialog := strings.Index(page, `<dialog id="ip-whitelist-dialog"`)
+	if button < 0 || quotaButton < 0 || button >= quotaButton || quotaDialog < 0 || ipDialog <= quotaDialog {
+		t.Fatal("IP whitelist is not a separate action before Edit quota")
+	}
+	if strings.Contains(page[quotaDialog:ipDialog], `id="ip-whitelist"`) || strings.Contains(page[quotaDialog:ipDialog], `id="ip-whitelist-enabled"`) {
+		t.Fatal("quota editor still contains the IP whitelist controls")
+	}
+}
+
 func TestPanelUsesProductionStylesAndPreviewSource(t *testing.T) {
 	page := panelHTML()
 	for _, marker := range []string{
@@ -186,6 +207,7 @@ func TestPanelUsesProductionStylesAndPreviewSource(t *testing.T) {
 		`#management-auth-dialog{box-sizing:border-box!important`, `#management-auth-dialog::backdrop`,
 		`#management-auth-dialog #management-auth-key`, `#management-auth-dialog>footer button`,
 		`#policy-dialog .policy-models{display:grid!important`,
+		`#policy-dialog .dialog-message{max-height:120px!important;overflow:auto!important;white-space:pre-wrap!important`,
 		`#policy-dialog .policy-model-item{display:flex!important`,
 		`--cc-primary:#168a67`, `target="_blank" rel="noopener noreferrer"`,
 		`.cc-panel .utility-meta{display:inline-flex`, `.cc-panel .version-badge{display:inline-flex`,
@@ -202,11 +224,11 @@ func TestPanelUsesProductionStylesAndPreviewSource(t *testing.T) {
 		`.cc-panel .log-action::before,.cc-panel .log-action::after,.cc-panel .row-action::before,.cc-panel .row-action::after{display:none!important;content:none!important}`,
 		`.cc-panel .log-action{font-size:0!important}`,
 		`.cc-panel .row-action{min-height:30px;padding:0 8px;border-radius:8px;font-size:13px!important}`,
-		`#policy-dialog[open],#rate-card-dialog[open],#log-detail-dialog[open],#key-log-dialog[open],#content-filter-dialog[open]{display:flex!important`,
-		`#policy-dialog>header,#rate-card-dialog>header,#log-detail-dialog>header,#key-log-dialog>header,#content-filter-dialog>header`,
-		`#policy-dialog>.form,#rate-card-dialog>.form,#log-detail-dialog>.form,#key-log-dialog>.form,#content-filter-dialog>.form`,
-		`#policy-dialog button,#rate-card-dialog button,#log-detail-dialog button,#key-log-dialog button,#content-filter-dialog button`,
-		`#policy-dialog button:focus-visible,#rate-card-dialog button:focus-visible,#log-detail-dialog button:focus-visible,#key-log-dialog button:focus-visible,#content-filter-dialog button:focus-visible`,
+		`#policy-dialog[open],#ip-whitelist-dialog[open],#rate-card-dialog[open],#log-detail-dialog[open],#key-log-dialog[open],#content-filter-dialog[open]{display:flex!important`,
+		`#policy-dialog>header,#ip-whitelist-dialog>header,#rate-card-dialog>header,#log-detail-dialog>header,#key-log-dialog>header,#content-filter-dialog>header`,
+		`#policy-dialog>.form,#ip-whitelist-dialog>.form,#rate-card-dialog>.form,#log-detail-dialog>.form,#key-log-dialog>.form,#content-filter-dialog>.form`,
+		`#policy-dialog button,#ip-whitelist-dialog button,#rate-card-dialog button,#log-detail-dialog button,#key-log-dialog button,#content-filter-dialog button`,
+		`#policy-dialog button:focus-visible,#ip-whitelist-dialog button:focus-visible,#rate-card-dialog button:focus-visible,#log-detail-dialog button:focus-visible,#key-log-dialog button:focus-visible,#content-filter-dialog button:focus-visible`,
 		`#rate-card-dialog .rate-card-row{margin-top:8px!important`,
 		`class="rate-card-scroll"`,
 		`#rate-card-dialog>.rate-card-form{display:flex!important;flex-direction:column!important;min-height:0!important;overflow:hidden!important`,
@@ -218,7 +240,7 @@ func TestPanelUsesProductionStylesAndPreviewSource(t *testing.T) {
 		`#rate-card-dialog label.rate-card-search{position:relative!important`,
 		`#rate-card-dialog .rate-card-row[hidden],#rate-card-dialog .rate-card-filter-empty[hidden]{display:none!important`,
 		`#log-detail-dialog .log-detail-grid{display:grid!important`,
-		`#policy-dialog .dialog-message,#rate-card-dialog .dialog-message,#content-filter-dialog .dialog-message`,
+		`#policy-dialog .dialog-message,#ip-whitelist-dialog .dialog-message,#rate-card-dialog .dialog-message,#content-filter-dialog .dialog-message`,
 		`id="content-filter-enabled" type="checkbox" role="switch"`,
 		`class="content-filter-switch" aria-hidden="true"`,
 		`class="content-filter-count">0 / 0`,

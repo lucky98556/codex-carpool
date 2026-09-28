@@ -2,6 +2,7 @@ package quota
 
 import (
 	"fmt"
+	"net/netip"
 	"sort"
 	"strings"
 	"time"
@@ -39,20 +40,23 @@ type storedInstallationSettings struct {
 
 // KeyPolicy governs one downstream CPA API Key. Enabled controls only fixed-cycle
 // dollar-budget rejection. Disabled rejects every model before routing while
-// retaining the bounded request audit. Empty model selection means all
-// CPA-synchronized models, and a zero budget means that window is unlimited.
+// retaining the bounded request audit. IPWhitelistEnabled is independent of
+// both budget modes. Empty model selection means all CPA-synchronized models,
+// and a zero budget means that window is unlimited.
 type KeyPolicy struct {
-	ID                string       `yaml:"id" json:"id"`
-	Name              string       `yaml:"name" json:"name"`
-	KeySHA256         string       `yaml:"key_sha256" json:"-"`
-	KeySuffix         string       `yaml:"key_suffix" json:"key_suffix,omitempty"`
-	FiveHourBudgetUSD float64      `yaml:"five_hour_budget_usd" json:"five_hour_budget_usd"`
-	SevenDayBudgetUSD float64      `yaml:"seven_day_budget_usd" json:"seven_day_budget_usd"`
-	AllowedModels     []string     `yaml:"allowed_models" json:"allowed_models"`
-	AccessRules       []AccessRule `yaml:"access_rules" json:"access_rules"`
-	AccessTimezone    string       `yaml:"access_timezone" json:"access_timezone"`
-	Enabled           bool         `yaml:"enabled" json:"enabled"`
-	Disabled          bool         `yaml:"disabled" json:"disabled"`
+	ID                 string       `yaml:"id" json:"id"`
+	Name               string       `yaml:"name" json:"name"`
+	KeySHA256          string       `yaml:"key_sha256" json:"-"`
+	KeySuffix          string       `yaml:"key_suffix" json:"key_suffix,omitempty"`
+	FiveHourBudgetUSD  float64      `yaml:"five_hour_budget_usd" json:"five_hour_budget_usd"`
+	SevenDayBudgetUSD  float64      `yaml:"seven_day_budget_usd" json:"seven_day_budget_usd"`
+	AllowedModels      []string     `yaml:"allowed_models" json:"allowed_models"`
+	AccessRules        []AccessRule `yaml:"access_rules" json:"access_rules"`
+	AccessTimezone     string       `yaml:"access_timezone" json:"access_timezone"`
+	IPWhitelist        []string     `yaml:"ip_whitelist" json:"ip_whitelist"`
+	IPWhitelistEnabled bool         `yaml:"ip_whitelist_enabled" json:"ip_whitelist_enabled"`
+	Enabled            bool         `yaml:"enabled" json:"enabled"`
+	Disabled           bool         `yaml:"disabled" json:"disabled"`
 }
 
 // RuntimeConfig is the validated immutable/startup view used by the engine.
@@ -179,6 +183,33 @@ func normalizePolicy(policy KeyPolicy) (KeyPolicy, error) {
 	}
 	policy.AccessRules = rules
 	policy.AccessTimezone = timezone
+	// Keep entries when the independent switch is off so they can be re-enabled later.
+	seenIPs := make(map[string]struct{}, len(policy.IPWhitelist))
+	ipWhitelist := make([]string, 0, len(policy.IPWhitelist))
+	for _, entry := range policy.IPWhitelist {
+		entry = strings.TrimSpace(entry)
+		if entry == "" {
+			continue
+		}
+		if prefix, err := netip.ParsePrefix(entry); err == nil {
+			if prefix.Addr().Zone() != "" || prefix.Addr().Is4In6() {
+				return KeyPolicy{}, fmt.Errorf("ip_whitelist: invalid IP address or CIDR %q", entry)
+			}
+			entry = prefix.Masked().String()
+		} else if address, err := netip.ParseAddr(entry); err == nil && address.Zone() == "" {
+			entry = address.Unmap().String()
+		} else {
+			return KeyPolicy{}, fmt.Errorf("ip_whitelist: invalid IP address or CIDR %q", entry)
+		}
+		if _, exists := seenIPs[entry]; !exists {
+			seenIPs[entry] = struct{}{}
+			ipWhitelist = append(ipWhitelist, entry)
+		}
+	}
+	if policy.IPWhitelistEnabled && len(ipWhitelist) == 0 {
+		return KeyPolicy{}, fmt.Errorf("ip_whitelist: at least one IP address or CIDR is required when enabled")
+	}
+	policy.IPWhitelist = ipWhitelist
 	return policy, nil
 }
 

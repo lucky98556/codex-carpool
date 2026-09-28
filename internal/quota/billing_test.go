@@ -3,12 +3,23 @@ package quota
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
 	"time"
 )
+
+func TestValidateAllowedModelsListsEveryMissingModel(t *testing.T) {
+	err := validateAllowedModels([]string{"gpt-5", "retired-one", "retired-two"}, []ModelCatalogEntry{
+		{ID: "gpt-5", Available: true}, {ID: "retired-two", Available: false},
+	})
+	var missing *MissingAllowedModelsError
+	if !errors.As(err, &missing) || len(missing.Models) != 2 || missing.Models[0] != "retired-one" || missing.Models[1] != "retired-two" {
+		t.Fatalf("missing model validation = %v, want both unavailable IDs", err)
+	}
+}
 
 func TestOpenStoreAddsCompleteRateProfilesToExistingDatabase(t *testing.T) {
 	if runtime.GOOS != "linux" {
@@ -65,7 +76,8 @@ created_at INTEGER NOT NULL,updated_at INTEGER NOT NULL);`); err != nil {
 	if err != nil {
 		t.Fatal(err)
 	}
-	policy := KeyPolicy{ID: "disabled", Name: "Disabled", KeySHA256: strings.Repeat("a", 64), Enabled: true, Disabled: true}
+	policy := KeyPolicy{ID: "disabled", Name: "Disabled", KeySHA256: strings.Repeat("a", 64), Enabled: true, Disabled: true,
+		IPWhitelistEnabled: true, IPWhitelist: []string{"203.0.113.0/24"}}
 	if err := store.UpsertPolicy(policy); err != nil {
 		_ = store.Close()
 		t.Fatal(err)
@@ -79,7 +91,8 @@ created_at INTEGER NOT NULL,updated_at INTEGER NOT NULL);`); err != nil {
 	}
 	defer func() { _ = store.Close() }()
 	policies, err := store.LoadPolicies()
-	if err != nil || len(policies) != 1 || !policies[0].Disabled || !policies[0].Enabled {
+	if err != nil || len(policies) != 1 || !policies[0].Disabled || !policies[0].Enabled ||
+		!policies[0].IPWhitelistEnabled || len(policies[0].IPWhitelist) != 1 || policies[0].IPWhitelist[0] != "203.0.113.0/24" {
 		t.Fatalf("reopened disabled policy = %+v, err=%v", policies, err)
 	}
 }
@@ -112,6 +125,26 @@ func TestOpenSeedsDefaultModelRatesOnlyForEmptyRateCard(t *testing.T) {
 			t.Fatalf("seeded rate for %q = %+v, exists=%t", expected.Model, actual, exists)
 		}
 	}
+	if _, err := engine.ReplaceModelRates(rates); err != nil {
+		_ = engine.Close()
+		t.Fatalf("saving untouched seed rates: %v", err)
+	}
+	for _, rate := range engine.ModelRates() {
+		if rate.Source != "" || rate.RateCardOnly {
+			_ = engine.Close()
+			t.Fatalf("untouched seed became a manual sync candidate: %+v", rate)
+		}
+	}
+	editedSeeds := engine.ModelRates()
+	editedSeeds[0].InputUSDPerMillion++
+	if _, err := engine.ReplaceModelRates(editedSeeds); err != nil {
+		_ = engine.Close()
+		t.Fatalf("editing a seed rate: %v", err)
+	}
+	if edited, exists := engine.modelRate(editedSeeds[0].Model); !exists || edited.Source != "manual" {
+		_ = engine.Close()
+		t.Fatalf("edited seed did not become a manual rate: %+v, exists=%t", edited, exists)
+	}
 	if _, err := engine.ReplaceModelRates([]ModelRate{{
 		Model: "operator-custom", InputUSDPerMillion: 3, CacheReadUSDPerMillion: 0.3, CacheWriteUSDPerMillion: 3, OutputUSDPerMillion: 12,
 		Tiers: []ModelRateTier{{ContextOverTokens: 200_000, InputUSDPerMillion: 6, OutputUSDPerMillion: 18}},
@@ -130,7 +163,7 @@ func TestOpenSeedsDefaultModelRatesOnlyForEmptyRateCard(t *testing.T) {
 	}
 	defer func() { _ = reopened.Close() }()
 	rates = reopened.ModelRates()
-	if len(rates) != 1 || rates[0].Model != "operator-custom" || rates[0].OutputUSDPerMillion != 12 || len(rates[0].Tiers) != 1 || len(rates[0].Modes) != 1 {
+	if len(rates) != 1 || rates[0].Model != "operator-custom" || !rates[0].RateCardOnly || rates[0].OutputUSDPerMillion != 12 || len(rates[0].Tiers) != 1 || len(rates[0].Modes) != 1 {
 		t.Fatalf("reopened rates = %+v, want preserved operator rate only", rates)
 	}
 }

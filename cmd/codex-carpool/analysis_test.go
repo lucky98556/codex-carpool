@@ -9,6 +9,8 @@ import (
 	"testing"
 	"time"
 
+	"codex-carpool/internal/quota"
+
 	"github.com/router-for-me/CLIProxyAPI/v7/sdk/pluginabi"
 	"github.com/router-for-me/CLIProxyAPI/v7/sdk/pluginapi"
 )
@@ -116,6 +118,15 @@ func TestAdmissionErrorsAreLocalizedWithoutChangingTheirStableCode(t *testing.T)
 	if got := admissionStatusCode("key_disabled"); got != http.StatusForbidden {
 		t.Fatalf("disabled-Key HTTP status = %d, want 403", got)
 	}
+	if got := localizedAdmissionMessage("zh", "ip_not_allowed", "ignored"); got != "当前来源 IP 不在此 Key 的白名单中。" {
+		t.Fatalf("Chinese IP whitelist message = %q", got)
+	}
+	if got := admissionStatusCode("ip_not_allowed"); got != http.StatusForbidden {
+		t.Fatalf("IP whitelist HTTP status = %d, want 403", got)
+	}
+	if got := managementErrorCode(errors.New("ip_whitelist: invalid IP address or CIDR")); got != "ip_whitelist_invalid" {
+		t.Fatalf("IP whitelist management error code = %q", got)
+	}
 	if got := localizedAdmissionMessage("zh", "unknown_code", "original English detail"); got != "请求暂时无法处理，请稍后重试。" {
 		t.Fatalf("Chinese unknown fallback = %q", got)
 	}
@@ -147,6 +158,37 @@ func TestManagementFailureDoesNotExposeRawInternalDetail(t *testing.T) {
 	}
 	if string(response.Body) == "sqlite busy at /private/plugin.db" {
 		t.Fatal("raw internal error detail leaked to management response")
+	}
+}
+
+func TestManagementFailureListsMissingModelIDsInBothLanguages(t *testing.T) {
+	for _, test := range []struct {
+		language string
+		want     string
+	}{
+		{"zh-CN", "选择的模型不在当前 CPA 模型目录中，请同步后重试。\nretired-one、retired-two"},
+		{"en-US", "A selected model is not in the current CPA model catalog. Sync and retry.\nretired-one, retired-two"},
+	} {
+		request := pluginapi.ManagementRequest{Headers: http.Header{"Accept-Language": []string{test.language}}}
+		raw, err := managementFailure(request, http.StatusBadRequest, &quota.MissingAllowedModelsError{Models: []string{"retired-one", "retired-two"}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		var wrapped envelope
+		if err := json.Unmarshal(raw, &wrapped); err != nil {
+			t.Fatal(err)
+		}
+		var response pluginapi.ManagementResponse
+		if err := json.Unmarshal(wrapped.Result, &response); err != nil {
+			t.Fatal(err)
+		}
+		var body managementErrorBody
+		if err := json.Unmarshal(response.Body, &body); err != nil {
+			t.Fatal(err)
+		}
+		if body.Code != "model_not_in_catalog" || body.Error != test.want {
+			t.Fatalf("%s error body = %+v", test.language, body)
+		}
 	}
 }
 
@@ -190,6 +232,7 @@ func TestManagementRegistrationUsesUsageManagementMenuName(t *testing.T) {
 		http.MethodDelete + " /codex-carpool/forbidden-logs": false,
 		http.MethodPut + " /codex-carpool/rate-sync":         false,
 	}
+	expectedRoutes[http.MethodPut+" /codex-carpool/keys/ip-whitelist"] = false
 	for _, route := range registration.Routes {
 		key := route.Method + " " + route.Path
 		if _, ok := expectedRoutes[key]; ok {

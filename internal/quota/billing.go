@@ -3,6 +3,7 @@ package quota
 import (
 	"fmt"
 	"math"
+	"reflect"
 	"sort"
 	"strings"
 	"time"
@@ -64,6 +65,7 @@ type ModelRate struct {
 	Model                      string          `json:"model"`
 	Provider                   string          `json:"provider,omitempty"`
 	Source                     string          `json:"source,omitempty"`
+	RateCardOnly               bool            `json:"rate_card_only,omitempty"`
 	InputUSDPerMillion         float64         `json:"input_usd_per_million"`
 	CacheReadUSDPerMillion     float64         `json:"cache_read_usd_per_million"`
 	CacheWriteUSDPerMillion    float64         `json:"cache_write_usd_per_million"`
@@ -475,9 +477,6 @@ func laterCoolingUntil(left, right *time.Time) *time.Time {
 func sortedModelRates(rates map[string]ModelRate) []ModelRate {
 	items := make([]ModelRate, 0, len(rates))
 	for _, rate := range rates {
-		if strings.TrimSpace(rate.Source) == "" {
-			rate.Source = "manual"
-		}
 		items = append(items, rate)
 	}
 	sort.Slice(items, func(left, right int) bool { return items[left].Model < items[right].Model })
@@ -526,17 +525,39 @@ func (engine *Engine) ReplaceModelRates(rates []ModelRate) ([]ModelRate, error) 
 	}
 	engine.rateSyncRunMu.Lock()
 	defer engine.rateSyncRunMu.Unlock()
+	models, err := engine.Models()
+	if err != nil {
+		return nil, err
+	}
+	available := make(map[string]bool, len(models))
+	for _, model := range models {
+		if model.Available {
+			available[model.ID] = true
+		}
+	}
+	currentRates := engine.ModelRates()
+	previous := make(map[string]ModelRate, len(currentRates))
+	for _, rate := range currentRates {
+		previous[rate.Model] = rate
+	}
 	normalized := make([]ModelRate, 0, len(rates))
 	next := make(map[string]ModelRate, len(rates))
 	updatedAt := time.Now().UTC()
 	for _, rate := range rates {
-		if strings.TrimSpace(rate.Source) == "" {
-			rate.Source = "manual"
-		}
+		modelID := strings.TrimSpace(rate.Model)
+		old, existed := previous[modelID]
 		rate, err := normalizeModelRate(rate)
 		if err != nil {
 			return nil, err
 		}
+		if strings.TrimSpace(rate.Source) == "" {
+			// Keep an untouched seed distinct from an operator-edited rate.
+			old.UpdatedAt, rate.UpdatedAt = time.Time{}, time.Time{}
+			if !existed || old.Source != "" || !reflect.DeepEqual(old, rate) {
+				rate.Source = "manual"
+			}
+		}
+		rate.RateCardOnly = old.RateCardOnly || (rate.Source == "manual" && !available[modelID] && !existed)
 		if _, duplicate := next[rate.Model]; duplicate {
 			return nil, fmt.Errorf("model rate %q is duplicated", rate.Model)
 		}

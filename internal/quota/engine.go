@@ -108,6 +108,7 @@ type ModelCatalogEntry struct {
 	Owner       string    `json:"owner"`
 	Available   bool      `json:"available"`
 	SyncedAt    time.Time `json:"synced_at"`
+	rateCardOnly bool
 }
 
 type meterEvent struct {
@@ -533,14 +534,20 @@ func (engine *Engine) Reconfigure(cfg RuntimeConfig) error {
 }
 
 func (engine *Engine) Admit(rawAPIKey, model string, now time.Time, candidateSets ...[]SchedulerCandidate) Admission {
-	return engine.admit(rawAPIKey, model, "", now, candidateSets...)
+	return engine.admit(rawAPIKey, model, "", "", now, candidateSets...)
 }
 
 func (engine *Engine) AdmitCaptured(rawAPIKey, model, captureID string, now time.Time, candidateSets ...[]SchedulerCandidate) Admission {
-	return engine.admit(rawAPIKey, model, captureID, now, candidateSets...)
+	return engine.admit(rawAPIKey, model, captureID, "", now, candidateSets...)
 }
 
-func (engine *Engine) admit(rawAPIKey, model, captureID string, now time.Time, candidateSets ...[]SchedulerCandidate) Admission {
+// AdmitCapturedFromIP evaluates an independently configured per-Key IP whitelist.
+// The caller must supply the value overwritten by the trusted Nginx ingress.
+func (engine *Engine) AdmitCapturedFromIP(rawAPIKey, model, captureID, clientIP string, now time.Time, candidateSets ...[]SchedulerCandidate) Admission {
+	return engine.admit(rawAPIKey, model, captureID, clientIP, now, candidateSets...)
+}
+
+func (engine *Engine) admit(rawAPIKey, model, captureID, clientIP string, now time.Time, candidateSets ...[]SchedulerCandidate) Admission {
 	if engine == nil {
 		return deny("quota_unavailable", "quota management is not initialized")
 	}
@@ -573,6 +580,9 @@ func (engine *Engine) admit(rawAPIKey, model, captureID string, now time.Time, c
 	}
 	if policy.Disabled {
 		return engine.blockAdmission(keyID, "", model, captured.Content, now, "key_disabled", "This API key is disabled", httpStatusForbidden, ContentFilterMatch{})
+	}
+	if !policy.AllowsIP(clientIP) {
+		return engine.blockAdmission(keyID, "", model, captured.Content, now, "ip_not_allowed", "This API key is not allowed from this IP address", httpStatusForbidden, ContentFilterMatch{})
 	}
 	if captured.Match.Matched {
 		return engine.blockAdmission(keyID, "", model, captured.Content, now, "content_forbidden", "The request matched a content-blocking expression", httpStatusForbidden, captured.Match)

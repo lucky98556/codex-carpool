@@ -16,7 +16,7 @@ import (
 )
 
 const (
-	modelsDevAPIURL          = "https://models.dev/api.json"
+	modelsDevAPIURL          = "https://models.dev/catalog.json"
 	modelRateSyncInterval    = 24 * time.Hour
 	modelRateSyncRetry       = time.Hour
 	modelRateSyncHTTPTimeout = 12 * time.Second
@@ -47,6 +47,11 @@ type modelsDevProvider struct {
 	ID     string                    `json:"id"`
 	Name   string                    `json:"name"`
 	Models map[string]modelsDevModel `json:"models"`
+}
+
+type modelsDevCatalog struct {
+	Models    map[string]json.RawMessage     `json:"models"`
+	Providers map[string]modelsDevProvider `json:"providers"`
 }
 
 type modelsDevModel struct {
@@ -174,6 +179,10 @@ func (engine *Engine) SyncModelRates(ctx context.Context) error {
 	if err != nil {
 		return engine.finishModelRateSync(status, fmt.Errorf("load CPA model catalog: %w", err))
 	}
+	// An operator may add a model in the rate card without adding it to CPA's
+	// account catalog. Include those explicit entries, but never the untouched
+	// seed rates for models that CPA has not reported as available.
+	catalog = modelRateSyncCandidates(catalog, engine.ModelRates())
 	catalogFingerprint := modelCatalogFingerprint(catalog)
 
 	requestCtx, cancel := context.WithTimeout(ctx, modelRateSyncHTTPTimeout)
@@ -205,14 +214,14 @@ func (engine *Engine) SyncModelRates(ctx context.Context) error {
 	if len(raw) > modelsDevMaxBodyBytes {
 		return engine.finishModelRateSync(status, fmt.Errorf("models.dev response exceeds %d bytes", modelsDevMaxBodyBytes))
 	}
-	var providers map[string]modelsDevProvider
-	if err := json.Unmarshal(raw, &providers); err != nil {
+	var upstream modelsDevCatalog
+	if err := json.Unmarshal(raw, &upstream); err != nil {
 		return engine.finishModelRateSync(status, fmt.Errorf("decode models.dev response: %w", err))
 	}
-	if !modelsDevCatalogHasModels(providers) {
+	if len(upstream.Models) == 0 || !modelsDevCatalogHasModels(upstream.Providers) {
 		return engine.finishModelRateSync(status, fmt.Errorf("models.dev returned an empty model catalog"))
 	}
-	rates, unmatched := modelRatesFromModelsDev(catalog, providers, now)
+	rates, unmatched := modelRatesFromModelsDev(catalog, upstream, now)
 	successStatus := status
 	successStatus.ETag = strings.TrimSpace(response.Header.Get("ETag"))
 	successStatus.CatalogFingerprint = catalogFingerprint
@@ -249,8 +258,44 @@ func modelsDevCatalogHasModels(providers map[string]modelsDevProvider) bool {
 	return false
 }
 
+func modelRateSyncCandidates(catalog []ModelCatalogEntry, rates []ModelRate) []ModelCatalogEntry {
+	candidates := append([]ModelCatalogEntry(nil), catalog...)
+	seen := make(map[string]struct{}, len(catalog)+len(rates))
+	for _, model := range catalog {
+		if model.Available {
+			seen[strings.TrimSpace(model.ID)] = struct{}{}
+		}
+	}
+	manualOrigins := make(map[string]bool, len(rates))
+	for _, rate := range rates {
+		id := strings.TrimSpace(rate.Model)
+		if id == "" {
+			continue
+		}
+		manualOrigins[id] = rate.RateCardOnly
+		// Synced prices alone do not prove the operator added the model.
+		if rate.Source != "manual" && !(rate.Source == "models.dev" && rate.RateCardOnly) {
+			continue
+		}
+		if _, exists := seen[id]; exists {
+			continue
+		}
+		seen[id] = struct{}{}
+		candidates = append(candidates, ModelCatalogEntry{ID: id, Owner: strings.TrimSpace(rate.Provider), Available: true, rateCardOnly: true})
+	}
+	for index := range candidates {
+		if manualOrigins[candidates[index].ID] {
+			candidates[index].rateCardOnly = true
+		}
+	}
+	return candidates
+}
+
 func modelCatalogFingerprint(catalog []ModelCatalogEntry) string {
-	entries := make([]string, 0, len(catalog))
+	// Include the matching-rule revision so existing ETags cannot skip a full
+	// reconciliation after the provider matching logic changes.
+	entries := make([]string, 0, len(catalog)+1)
+	entries = append(entries, "canonical-catalog-match-v3")
 	for _, item := range catalog {
 		if item.Available {
 			entries = append(entries, strings.TrimSpace(item.ID)+"\x00"+normalizedProviderID(item.Owner))
@@ -282,19 +327,21 @@ func (engine *Engine) finishModelRateSync(status ModelRateSyncStatus, syncErr er
 	return syncErr
 }
 
-func modelRatesFromModelsDev(catalog []ModelCatalogEntry, providers map[string]modelsDevProvider, now time.Time) ([]ModelRate, int) {
+func modelRatesFromModelsDev(catalog []ModelCatalogEntry, upstream modelsDevCatalog, now time.Time) ([]ModelRate, int) {
 	rates := make([]ModelRate, 0, len(catalog))
 	unmatched := 0
+	canonical := canonicalModelProviders(upstream.Models)
 	for _, item := range catalog {
 		if !item.Available {
 			continue
 		}
-		providerID, model, found := matchModelsDevModel(item, providers)
+		providerID, model, found := matchModelsDevModel(item, upstream.Providers, canonical)
 		if !found || model.Cost.Input == nil || model.Cost.Output == nil {
 			unmatched++
 			continue
 		}
 		rate := modelRateFromModelsDev(item.ID, providerID, model, now)
+		rate.RateCardOnly = item.rateCardOnly
 		normalized, err := normalizeModelRate(rate)
 		if err != nil {
 			unmatched++
@@ -306,28 +353,58 @@ func modelRatesFromModelsDev(catalog []ModelCatalogEntry, providers map[string]m
 	return rates, unmatched
 }
 
-func matchModelsDevModel(item ModelCatalogEntry, providers map[string]modelsDevProvider) (string, modelsDevModel, bool) {
-	modelID := strings.TrimSpace(item.ID)
-	owner := normalizedProviderID(item.Owner)
-	for providerID, provider := range providers {
-		if !providerMatchesOwner(owner, providerID, provider.ID, provider.Name) {
+func canonicalModelProviders(models map[string]json.RawMessage) map[string]string {
+	providers := make(map[string]string, len(models))
+	for key := range models {
+		providerID, modelID, ok := strings.Cut(key, "/")
+		if !ok || providerID == "" || modelID == "" {
 			continue
 		}
-		if model, found := providerModel(provider, modelID); found {
-			return providerID, model, true
+		if previous, exists := providers[modelID]; exists && previous != providerID {
+			providers[modelID] = "" // Different labs claim this ID: do not guess.
+		} else if !exists {
+			providers[modelID] = providerID
 		}
 	}
-	var matchedProvider string
-	var matched modelsDevModel
-	for providerID, provider := range providers {
-		if model, found := providerModel(provider, modelID); found {
-			if matchedProvider != "" {
-				return "", modelsDevModel{}, false
-			}
-			matchedProvider, matched = providerID, model
-		}
+	return providers
+}
+
+func matchModelsDevModel(item ModelCatalogEntry, providers map[string]modelsDevProvider, canonical map[string]string) (string, modelsDevModel, bool) {
+	modelID := strings.TrimSpace(item.ID)
+	labID := canonical[modelID]
+	if labID == "" {
+		return "", modelsDevModel{}, false
 	}
-	return matchedProvider, matched, matchedProvider != ""
+	providerID, provider, found := providerForLab(providers, labID)
+	if !found {
+		return "", modelsDevModel{}, false
+	}
+	model, found := providerModel(provider, modelID)
+	return providerID, model, found
+}
+
+func providerForLab(providers map[string]modelsDevProvider, labID string) (string, modelsDevProvider, bool) {
+	if provider, exists := providers[labID]; exists {
+		return labID, provider, true
+	}
+	// Some lab and provider IDs differ only in punctuation. Accept this only
+	// when the normalized ID identifies exactly one provider in the catalog.
+	wanted := normalizedProviderID(labID)
+	if wanted == "" {
+		return "", modelsDevProvider{}, false
+	}
+	var matchedID string
+	var matched modelsDevProvider
+	for id, provider := range providers {
+		if normalizedProviderID(id) != wanted {
+			continue
+		}
+		if matchedID != "" {
+			return "", modelsDevProvider{}, false
+		}
+		matchedID, matched = id, provider
+	}
+	return matchedID, matched, matchedID != ""
 }
 
 func providerModel(provider modelsDevProvider, modelID string) (modelsDevModel, bool) {
@@ -342,32 +419,10 @@ func providerModel(provider modelsDevProvider, modelID string) (modelsDevModel, 
 	return modelsDevModel{}, false
 }
 
-func providerMatchesOwner(owner string, candidates ...string) bool {
-	if owner == "" {
-		return false
-	}
-	for _, candidate := range candidates {
-		candidate = normalizedProviderID(candidate)
-		if candidate != "" && owner == candidate {
-			return true
-		}
-	}
-	return false
-}
-
 func normalizedProviderID(value string) string {
 	value = strings.ToLower(strings.TrimSpace(value))
 	replacer := strings.NewReplacer(".", "", "-", "", "_", "", " ", "")
-	value = replacer.Replace(value)
-	switch value {
-	case "claude":
-		return "anthropic"
-	case "gemini", "googleai", "aistudio":
-		return "google"
-	case "xai", "xaiapi", "grok":
-		return "xai"
-	}
-	return value
+	return replacer.Replace(value)
 }
 
 func modelRateFromModelsDev(modelID, providerID string, model modelsDevModel, now time.Time) ModelRate {
@@ -448,7 +503,7 @@ func (engine *Engine) wakeModelRateSync() {
 }
 
 // RequestModelRateSync queues a refresh on the managed synchronization loop so
-// callers that update the CPA model catalog do not wait on external HTTP.
+// catalog and rate-card edits do not wait on external HTTP.
 func (engine *Engine) RequestModelRateSync() {
 	if engine == nil {
 		return

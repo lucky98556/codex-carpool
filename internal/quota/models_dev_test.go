@@ -1,6 +1,8 @@
 package quota
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -23,6 +25,26 @@ func modelRateResponseHeader(name, value string) http.Header {
 	return header
 }
 
+func modelRateCatalog(providers string, canonicalIDs ...string) string {
+	models := make(map[string]json.RawMessage, len(canonicalIDs))
+	for _, id := range canonicalIDs {
+		models[id] = json.RawMessage(`{}`)
+	}
+	encoded, err := json.Marshal(modelsDevCatalog{Models: models, Providers: decodeTestProviders(providers)})
+	if err != nil {
+		panic(err)
+	}
+	return string(encoded)
+}
+
+func decodeTestProviders(raw string) map[string]modelsDevProvider {
+	var providers map[string]modelsDevProvider
+	if err := json.Unmarshal([]byte(raw), &providers); err != nil {
+		panic(err)
+	}
+	return providers
+}
+
 func TestModelsDevCompleteRateProfileAndProviderMatch(t *testing.T) {
 	raw := []byte(`{
   "openai": {"id":"openai","name":"OpenAI","models":{"gpt-5.6-terra":{"id":"gpt-5.6-terra","cost":{
@@ -39,7 +61,7 @@ func TestModelsDevCompleteRateProfileAndProviderMatch(t *testing.T) {
 	rates, unmatched := modelRatesFromModelsDev([]ModelCatalogEntry{
 		{ID: "gpt-5.6-terra", Owner: "OpenAI", Available: true},
 		{ID: "manual-alias", Owner: "OpenAI", Available: true},
-	}, providers, now)
+	}, modelsDevCatalog{Models: map[string]json.RawMessage{"openai/gpt-5.6-terra": json.RawMessage(`{}`)}, Providers: providers}, now)
 	if len(rates) != 1 || unmatched != 1 {
 		t.Fatalf("rates=%+v unmatched=%d", rates, unmatched)
 	}
@@ -49,12 +71,208 @@ func TestModelsDevCompleteRateProfileAndProviderMatch(t *testing.T) {
 	}
 }
 
-func TestProviderOwnerMatchingDoesNotUseBroadPrefixes(t *testing.T) {
-	if providerMatchesOwner(normalizedProviderID("openai-compatible"), "openai") {
-		t.Fatal("openai-compatible owner incorrectly matched the OpenAI provider by prefix")
+func TestModelsDevSyncIncludesManuallyAddedNonGPTModels(t *testing.T) {
+	engine := newTestEngine(t, KeyPolicy{ID: "managed", Name: "Managed", Enabled: true})
+	defer func() { _ = engine.Close() }()
+	if err := engine.ReplaceModels([]ModelCatalogEntry{{ID: "gpt-5", Owner: "OpenAI", Available: true}, {ID: "claude-opus-4-6", Owner: "Claude", Available: true}}); err != nil {
+		t.Fatal(err)
 	}
-	if !providerMatchesOwner(normalizedProviderID("Claude"), "anthropic") || !providerMatchesOwner(normalizedProviderID("Grok"), "xai") {
-		t.Fatal("canonical provider aliases did not match exactly")
+	if _, err := engine.ReplaceModelRates([]ModelRate{
+		{Model: "claude-sonnet-4-6", InputUSDPerMillion: 99},
+		{Model: "gemini-2.5-flash", InputUSDPerMillion: 99},
+		{Model: "manual-alias", InputUSDPerMillion: 7},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	response := modelRateCatalog(`{"openai":{"id":"openai","models":{"gpt-5":{"id":"gpt-5","cost":{"input":2,"output":10}}}},"anthropic":{"id":"anthropic","models":{"claude-sonnet-4-6":{"id":"claude-sonnet-4-6","cost":{"input":3,"output":15}},"claude-opus-4-6":{"id":"claude-opus-4-6","cost":{"input":5,"output":25}}}},"reseller":{"id":"reseller","models":{"claude-sonnet-4-6":{"id":"claude-sonnet-4-6","cost":{"input":99,"output":99}},"gemini-2.5-flash":{"id":"gemini-2.5-flash","cost":{"input":99,"output":99}}}},"google":{"id":"google","models":{"gemini-2.5-flash":{"id":"gemini-2.5-flash","cost":{"input":0.3,"output":2.5}}}}}`, "openai/gpt-5", "anthropic/claude-sonnet-4-6", "anthropic/claude-opus-4-6", "google/gemini-2.5-flash")
+	engine.rateSyncClient = modelRateRoundTripFunc(func(*http.Request) (*http.Response, error) {
+		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(response))}, nil
+	})
+	if err := engine.SyncModelRates(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	for _, expected := range []struct {
+		model, provider string
+		input           float64
+	}{
+		{"claude-opus-4-6", "anthropic", 5},
+		{"claude-sonnet-4-6", "anthropic", 3},
+		{"gemini-2.5-flash", "google", 0.3},
+		{"gpt-5", "openai", 2},
+	} {
+		rate, found := engine.modelRate(expected.model)
+		if !found || rate.Provider != expected.provider || rate.Source != "models.dev" || rate.InputUSDPerMillion != expected.input {
+			t.Fatalf("%s synchronized rate = %+v, found=%t", expected.model, rate, found)
+		}
+	}
+	if rate, found := engine.modelRate("manual-alias"); !found || rate.Source != "manual" || rate.InputUSDPerMillion != 7 {
+		t.Fatalf("unmatched manual alias changed: %+v, found=%t", rate, found)
+	}
+	if status := engine.ModelRateSyncStatus(); status.MatchedModels != 4 || status.UnmatchedModels != 1 {
+		t.Fatalf("rate sync status = %+v", status)
+	}
+}
+
+func TestModelsDevSyncUsesFirstPartyPricesForCPAGeminiAndDeepSeekModels(t *testing.T) {
+	engine := newTestEngine(t, KeyPolicy{ID: "managed", Name: "Managed", Enabled: true})
+	defer func() { _ = engine.Close() }()
+	// The shared fixture's manual gpt-5 rate is unrelated to this catalog.
+	if _, err := engine.ReplaceModelRates(nil); err != nil {
+		t.Fatal(err)
+	}
+	// CPA's owner describes the access channel, not necessarily the model vendor.
+	if err := engine.ReplaceModels([]ModelCatalogEntry{
+		{ID: "gemini-2.5-flash", Owner: "antigravity", Available: true},
+		{ID: "deepseek-v4-flash", Owner: "openai-compatibility", Available: true},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	response := modelRateCatalog(`{"google":{"id":"google","models":{"gemini-2.5-flash":{"id":"gemini-2.5-flash","cost":{"input":0.3,"output":2.5}}}},"deepseek":{"id":"deepseek","models":{"deepseek-v4-flash":{"id":"deepseek-v4-flash","cost":{"input":0.15,"output":0.6}}}},"reseller":{"id":"reseller","models":{"gemini-2.5-flash":{"id":"gemini-2.5-flash","cost":{"input":99,"output":99}},"deepseek-v4-flash":{"id":"deepseek-v4-flash","cost":{"input":99,"output":99}}}}}`, "google/gemini-2.5-flash", "deepseek/deepseek-v4-flash")
+	engine.rateSyncClient = modelRateRoundTripFunc(func(*http.Request) (*http.Response, error) {
+		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(response))}, nil
+	})
+	if err := engine.SyncModelRates(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	for _, expected := range []struct {
+		model, provider string
+		input           float64
+	}{
+		{"gemini-2.5-flash", "google", 0.3},
+		{"deepseek-v4-flash", "deepseek", 0.15},
+	} {
+		rate, found := engine.modelRate(expected.model)
+		if !found || rate.Provider != expected.provider || rate.InputUSDPerMillion != expected.input {
+			t.Fatalf("CPA model %s synchronized rate = %+v, found=%t", expected.model, rate, found)
+		}
+	}
+	if status := engine.ModelRateSyncStatus(); status.MatchedModels != 2 || status.UnmatchedModels != 0 {
+		t.Fatalf("CPA model rate sync status = %+v", status)
+	}
+}
+
+func TestRemovedCPAModelRetiresButManualAdditionKeepsSyncing(t *testing.T) {
+	engine := newTestEngine(t, KeyPolicy{ID: "managed", Name: "Managed", Enabled: true})
+	defer func() { _ = engine.Close() }()
+	if err := engine.ReplaceModels([]ModelCatalogEntry{{ID: "cpa-model", Available: true}, {ID: "remaining-model", Available: true}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := engine.ReplaceModelRates([]ModelRate{{Model: "manual-model", Source: "manual"}}); err != nil {
+		t.Fatal(err)
+	}
+	response := modelRateCatalog(`{"new-lab":{"models":{"cpa-model":{"id":"cpa-model","cost":{"input":1,"output":2}},"remaining-model":{"id":"remaining-model","cost":{"input":1,"output":2}},"manual-model":{"id":"manual-model","cost":{"input":1,"output":2}}}}}`, "new-lab/cpa-model", "new-lab/remaining-model", "new-lab/manual-model")
+	engine.rateSyncClient = modelRateRoundTripFunc(func(*http.Request) (*http.Response, error) {
+		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(response))}, nil
+	})
+	if err := engine.SyncModelRates(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if rate, found := engine.modelRate("manual-model"); !found || !rate.RateCardOnly || rate.Source != "models.dev" {
+		t.Fatalf("manual model origin was not retained after sync: %+v, found=%t", rate, found)
+	}
+	stored, err := engine.store.ListModelRates()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(stored) != 3 || stored[0].Model != "cpa-model" || stored[0].RateCardOnly || stored[1].Model != "manual-model" || !stored[1].RateCardOnly {
+		t.Fatalf("manual origin was not persisted: %+v", stored)
+	}
+	if err := engine.ReplaceModels([]ModelCatalogEntry{{ID: "remaining-model", Available: true}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := engine.SyncModelRates(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if _, found := engine.modelRate("cpa-model"); found {
+		t.Fatal("removed CPA model still has a synchronized rate")
+	}
+	if rate, found := engine.modelRate("manual-model"); !found || !rate.RateCardOnly || rate.Source != "models.dev" {
+		t.Fatalf("manual model stopped synchronizing after CPA catalog update: %+v, found=%t", rate, found)
+	}
+}
+
+func TestModelCatalogFingerprintChangesAfterFirstPartyMatchingUpgrade(t *testing.T) {
+	model := ModelCatalogEntry{ID: "gemini-2.5-flash", Owner: "antigravity", Available: true}
+	oldFingerprint := sha256.Sum256([]byte(model.ID + "\x00" + normalizedProviderID(model.Owner)))
+	if got := modelCatalogFingerprint([]ModelCatalogEntry{model}); got == hex.EncodeToString(oldFingerprint[:]) {
+		t.Fatal("old ETag would skip reconciliation with the upgraded matching rules")
+	}
+}
+
+func TestModelsDevManualModelAdditionInvalidatesCatalogETag(t *testing.T) {
+	engine := newTestEngine(t, KeyPolicy{ID: "managed", Name: "Managed", Enabled: true})
+	defer func() { _ = engine.Close() }()
+	if err := engine.ReplaceModels([]ModelCatalogEntry{{ID: "gpt-5", Owner: "OpenAI", Available: true}}); err != nil {
+		t.Fatal(err)
+	}
+	engine.rateSyncClient = modelRateRoundTripFunc(func(*http.Request) (*http.Response, error) {
+		return &http.Response{StatusCode: http.StatusOK, Header: modelRateResponseHeader("ETag", `"prices-v1"`), Body: io.NopCloser(strings.NewReader(modelRateCatalog(`{"openai":{"id":"openai","models":{"gpt-5":{"id":"gpt-5","cost":{"input":2,"output":10}}}}}`, "openai/gpt-5")))}, nil
+	})
+	if err := engine.SyncModelRates(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := engine.ReplaceModelRates([]ModelRate{{Model: "gpt-5", Source: "models.dev", InputUSDPerMillion: 2}, {Model: "claude-sonnet-4-6", Source: "manual", InputUSDPerMillion: 9}}); err != nil {
+		t.Fatal(err)
+	}
+	engine.rateSyncClient = modelRateRoundTripFunc(func(request *http.Request) (*http.Response, error) {
+		if got := request.Header.Get("If-None-Match"); got != "" {
+			t.Fatalf("new manual model reused stale ETag %q", got)
+		}
+		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(modelRateCatalog(`{"anthropic":{"id":"anthropic","models":{"claude-sonnet-4-6":{"id":"claude-sonnet-4-6","cost":{"input":3,"output":15}}}}}`, "anthropic/claude-sonnet-4-6")))}, nil
+	})
+	if err := engine.SyncModelRates(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if rate, found := engine.modelRate("claude-sonnet-4-6"); !found || rate.Source != "models.dev" || rate.InputUSDPerMillion != 3 {
+		t.Fatalf("new manual model was not synchronized: %+v, found=%t", rate, found)
+	}
+}
+
+func TestModelsDevDoesNotUseResellerPriceWhenFirstPartyPriceIsMissing(t *testing.T) {
+	candidates := modelRateSyncCandidates([]ModelCatalogEntry{{ID: "claude-sonnet-4-6", Available: false}}, []ModelRate{{Model: "gpt-seed"}, {Model: "claude-sonnet-4-6", Source: "manual"}})
+	if len(candidates) != 2 || candidates[1].Owner != "" || !candidates[1].Available {
+		t.Fatalf("manual model candidates = %+v", candidates)
+	}
+	price := 99.0
+	providers := map[string]modelsDevProvider{"reseller": {Models: map[string]modelsDevModel{
+		"claude-sonnet-4-6": {ID: "claude-sonnet-4-6", Cost: modelsDevCost{Input: &price, Output: &price}},
+	}}}
+	if rates, unmatched := modelRatesFromModelsDev(candidates, modelsDevCatalog{Models: map[string]json.RawMessage{"anthropic/claude-sonnet-4-6": json.RawMessage(`{}`)}, Providers: providers}, time.Now()); len(rates) != 0 || unmatched != 1 {
+		t.Fatalf("first-party price missing: rates=%+v unmatched=%d", rates, unmatched)
+	}
+}
+
+func TestCanonicalModelProvidersRejectsAmbiguousIDs(t *testing.T) {
+	providers := canonicalModelProviders(map[string]json.RawMessage{
+		"lab-a/shared-model": json.RawMessage(`{}`),
+		"lab-b/shared-model": json.RawMessage(`{}`),
+	})
+	if providers["shared-model"] != "" {
+		t.Fatalf("ambiguous model matched provider %q", providers["shared-model"])
+	}
+}
+
+func TestModelsDevMatchesNewLabWithoutCodeMapping(t *testing.T) {
+	upstream := modelsDevCatalog{
+		Models: map[string]json.RawMessage{"new-lab/orbit-1": json.RawMessage(`{}`)},
+		Providers: decodeTestProviders(`{"new-lab":{"models":{"orbit-1":{"id":"orbit-1","cost":{"input":2,"output":8}}}},"reseller":{"models":{"orbit-1":{"id":"orbit-1","cost":{"input":99,"output":99}}}}}`),
+	}
+	rates, unmatched := modelRatesFromModelsDev([]ModelCatalogEntry{{ID: "orbit-1", Owner: "openai-compatibility", Available: true}}, upstream, time.Now())
+	if len(rates) != 1 || unmatched != 0 || rates[0].Provider != "new-lab" || rates[0].InputUSDPerMillion != 2 {
+		t.Fatalf("new lab rate = %+v, unmatched=%d", rates, unmatched)
+	}
+}
+
+func TestModelsDevLabProviderIDFormattingMustBeUnambiguous(t *testing.T) {
+	providers := decodeTestProviders(`{"xai":{"models":{"grok-4":{"id":"grok-4","cost":{"input":3,"output":15}}}},"relay":{"models":{"grok-4":{"id":"grok-4","cost":{"input":99,"output":99}}}}}`)
+	upstream := modelsDevCatalog{Models: map[string]json.RawMessage{"x-ai/grok-4": json.RawMessage(`{}`)}, Providers: providers}
+	rates, unmatched := modelRatesFromModelsDev([]ModelCatalogEntry{{ID: "grok-4", Available: true}}, upstream, time.Now())
+	if len(rates) != 1 || unmatched != 0 || rates[0].Provider != "xai" || rates[0].InputUSDPerMillion != 3 {
+		t.Fatalf("normalized lab match = %+v, unmatched=%d", rates, unmatched)
+	}
+	providers["x_ai"] = providers["xai"]
+	if rates, unmatched = modelRatesFromModelsDev([]ModelCatalogEntry{{ID: "grok-4", Available: true}}, upstream, time.Now()); len(rates) != 0 || unmatched != 1 {
+		t.Fatalf("ambiguous normalized provider match = %+v, unmatched=%d", rates, unmatched)
 	}
 }
 
@@ -104,7 +322,7 @@ func TestModelsDevSyncUpdatesMatchesAndFailureRetainsRates(t *testing.T) {
 	if _, err := engine.ReplaceModelRates([]ModelRate{{Model: "gpt-5.6-terra", InputUSDPerMillion: 9}, {Model: "manual-alias", InputUSDPerMillion: 3}}); err != nil {
 		t.Fatal(err)
 	}
-	payload := `{"openai":{"id":"openai","name":"OpenAI","models":{"gpt-5.6-terra":{"id":"gpt-5.6-terra","cost":{"input":2,"output":12,"cache_read":0.2,"cache_write":2.5}},"gpt-retired":{"id":"gpt-retired","cost":{"input":1,"output":4}}}}}`
+	payload := modelRateCatalog(`{"openai":{"id":"openai","name":"OpenAI","models":{"gpt-5.6-terra":{"id":"gpt-5.6-terra","cost":{"input":2,"output":12,"cache_read":0.2,"cache_write":2.5}},"gpt-retired":{"id":"gpt-retired","cost":{"input":1,"output":4}}}}}`, "openai/gpt-5.6-terra", "openai/gpt-retired")
 	engine.rateSyncClient = modelRateRoundTripFunc(func(*http.Request) (*http.Response, error) {
 		return &http.Response{StatusCode: http.StatusOK, Header: modelRateResponseHeader("ETag", `"rate-v1"`), Body: io.NopCloser(strings.NewReader(payload))}, nil
 	})
@@ -115,7 +333,7 @@ func TestModelsDevSyncUpdatesMatchesAndFailureRetainsRates(t *testing.T) {
 	if len(rates) != 3 || rates[0].Model != "gpt-5.6-terra" || rates[0].Source != "models.dev" || rates[1].Model != "gpt-retired" || rates[1].Source != "models.dev" || rates[2].Model != "manual-alias" || rates[2].InputUSDPerMillion != 3 {
 		t.Fatalf("rates after successful sync = %+v", rates)
 	}
-	withoutRetired := `{"openai":{"id":"openai","name":"OpenAI","models":{"gpt-5.6-terra":{"id":"gpt-5.6-terra","cost":{"input":2,"output":12,"cache_read":0.2,"cache_write":2.5}}}}}`
+	withoutRetired := modelRateCatalog(`{"openai":{"id":"openai","name":"OpenAI","models":{"gpt-5.6-terra":{"id":"gpt-5.6-terra","cost":{"input":2,"output":12,"cache_read":0.2,"cache_write":2.5}}}}}`, "openai/gpt-5.6-terra", "openai/gpt-retired")
 	engine.rateSyncClient = modelRateRoundTripFunc(func(*http.Request) (*http.Response, error) {
 		return &http.Response{StatusCode: http.StatusOK, Header: modelRateResponseHeader("ETag", `"rate-v2"`), Body: io.NopCloser(strings.NewReader(withoutRetired))}, nil
 	})
@@ -166,7 +384,7 @@ func TestReenablingModelsDevSyncForcesFullReconciliation(t *testing.T) {
 		if got := request.Header.Get("If-None-Match"); got != "" {
 			t.Fatalf("re-enabled synchronization sent stale If-None-Match %q", got)
 		}
-		return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(`{"openai":{"id":"openai","models":{"gpt-5.6-terra":{"id":"gpt-5.6-terra","cost":{"input":2,"output":12}}}}}`))}, nil
+		return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(modelRateCatalog(`{"openai":{"id":"openai","models":{"gpt-5.6-terra":{"id":"gpt-5.6-terra","cost":{"input":2,"output":12}}}}}`, "openai/gpt-5.6-terra")))}, nil
 	})
 	status, err := engine.SetModelRateSyncEnabled(true)
 	if err != nil {
@@ -191,7 +409,7 @@ func TestRequestedModelRateSyncRunsWithoutWaitingForSchedule(t *testing.T) {
 	requested := make(chan struct{}, 1)
 	engine.rateSyncClient = modelRateRoundTripFunc(func(*http.Request) (*http.Response, error) {
 		requested <- struct{}{}
-		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(`{"openai":{"id":"openai","models":{"gpt-5":{"id":"gpt-5","cost":{"input":1,"output":4}}}}}`))}, nil
+		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(modelRateCatalog(`{"openai":{"id":"openai","models":{"gpt-5":{"id":"gpt-5","cost":{"input":1,"output":4}}}}}`, "openai/gpt-5")))}, nil
 	})
 	engine.RequestModelRateSync()
 	select {
@@ -228,7 +446,7 @@ func TestSynchronizedRatesAndStatusRollbackTogether(t *testing.T) {
 		t.Fatal(err)
 	}
 	engine.rateSyncClient = modelRateRoundTripFunc(func(*http.Request) (*http.Response, error) {
-		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(`{"openai":{"id":"openai","models":{"gpt-5":{"id":"gpt-5","cost":{"input":1,"output":4}}}}}`))}, nil
+		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(modelRateCatalog(`{"openai":{"id":"openai","models":{"gpt-5":{"id":"gpt-5","cost":{"input":1,"output":4}}}}}`, "openai/gpt-5")))}, nil
 	})
 	if err := engine.SyncModelRates(t.Context()); err == nil {
 		t.Fatal("synchronization unexpectedly succeeded without metadata storage")
@@ -304,7 +522,7 @@ func TestModelsDevSyncRetiresLastStaleRateButRejectsEmptyUpstreamCatalog(t *test
 		t.Fatal(err)
 	}
 	engine.rateSyncClient = modelRateRoundTripFunc(func(*http.Request) (*http.Response, error) {
-		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(`{"openai":{"id":"openai","models":{"another-model":{"id":"another-model","cost":{"input":1,"output":4}}}}}`))}, nil
+		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(modelRateCatalog(`{"openai":{"id":"openai","models":{"another-model":{"id":"another-model","cost":{"input":1,"output":4}}}}}`, "openai/another-model", "openai/gpt-old")))}, nil
 	})
 	if err := engine.SyncModelRates(t.Context()); err != nil {
 		t.Fatal(err)

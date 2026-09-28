@@ -114,8 +114,18 @@ func managementFailure(request pluginapi.ManagementRequest, status int, cause er
 			)
 		}
 	}
+	language := managementLanguage(request)
+	message := localizedManagementError(language, code)
+	var missing *quota.MissingAllowedModelsError
+	if errors.As(cause, &missing) && len(missing.Models) > 0 {
+		separator := ", "
+		if language == "zh" {
+			separator = "、"
+		}
+		message += "\n" + strings.Join(missing.Models, separator)
+	}
 	return managementJSON(status, managementErrorBody{
-		Error: localizedManagementError(managementLanguage(request), code),
+		Error: message,
 		Code:  code,
 	})
 }
@@ -149,6 +159,10 @@ func safeManagementFailureDetail(cause error) string {
 }
 
 func managementErrorCode(cause error) string {
+	var missing *quota.MissingAllowedModelsError
+	if errors.As(cause, &missing) {
+		return "model_not_in_catalog"
+	}
 	message := strings.ToLower(strings.TrimSpace(cause.Error()))
 	switch {
 	case strings.Contains(message, "not initialized"):
@@ -175,6 +189,8 @@ func managementErrorCode(cause error) string {
 		return "trend_request_invalid"
 	case strings.Contains(message, "access_rules") || strings.Contains(message, "access_timezone"):
 		return "access_schedule_invalid"
+	case strings.Contains(message, "ip_whitelist"):
+		return "ip_whitelist_invalid"
 	case strings.Contains(message, "invalid re2 expression"):
 		return "content_filter_expression_invalid"
 	case strings.Contains(message, "content-filter expression") && strings.Contains(message, "must not match empty"):
@@ -231,6 +247,8 @@ func localizedManagementError(language, code string) string {
 		chinese, english = "趋势统计参数无效。", "The trend request is invalid."
 	case "access_schedule_invalid":
 		chinese, english = "访问时段配置无效，请检查时区、星期和起止时间。", "The access schedule is invalid. Check the time zone, weekdays, and start/end times."
+	case "ip_whitelist_invalid":
+		chinese, english = "IP 白名单配置无效；启用时至少填写一个有效 IP 或网段，多个地址用英文分号分隔。", "The IP whitelist is invalid. Enter at least one valid IP address or CIDR when enabled, separated by semicolons."
 	case "content_filter_expression_invalid":
 		chinese, english = "正则表达式无效，请检查 RE2 语法、长度和重复项。", "The regular expression is invalid. Check its RE2 syntax, length, and duplicates."
 	case "content_filter_expression_empty":
@@ -280,6 +298,8 @@ func localizedAdmissionMessage(language, code, fallback string) string {
 		chinese, english = "额度守卫暂不可用，请稍后重试。", "The quota guard is temporarily unavailable. Please retry."
 	case "access_schedule_closed":
 		chinese, english = "当前时间不在此 Key 允许访问的时段内。", "The current time is outside this API Key's allowed access schedule."
+	case "ip_not_allowed":
+		chinese, english = "当前来源 IP 不在此 Key 的白名单中。", "The client IP is not on this API Key's whitelist."
 	case "model_not_allowed":
 		chinese, english = "此 Key 不允许使用所请求的模型。", "This API Key is not allowed to use the requested model."
 	case "key_disabled":
@@ -350,6 +370,12 @@ type resourceRoute struct {
 type policyRequest struct {
 	Policy quota.KeyPolicy `json:"policy"`
 	APIKey string          `json:"api_key"`
+}
+
+type ipWhitelistRequest struct {
+	KeyID   string   `json:"key_id"`
+	Entries []string `json:"ip_whitelist"`
+	Enabled bool     `json:"ip_whitelist_enabled"`
 }
 
 type setupRequest struct {
@@ -516,6 +542,8 @@ func handleMethod(method string, request []byte) ([]byte, error) {
 				{Method: http.MethodGet, Path: "/" + pluginName + "/keys", Description: "Lists downstream API Key policies without secrets."},
 				{Method: http.MethodPost, Path: "/" + pluginName + "/keys", Description: "Creates a five-hour and seven-day dollar budget policy for a CPA API Key."},
 				{Method: http.MethodPut, Path: "/" + pluginName + "/keys", Description: "Updates a Key dollar budget, remark, or access state."},
+				// CPA forwards management requests only for registered routes.
+				{Method: http.MethodPut, Path: "/" + pluginName + "/keys/ip-whitelist", Description: "Updates a Key's independent IP whitelist and switch."},
 				{Method: http.MethodDelete, Path: "/" + pluginName + "/keys", Description: "Deletes one Key policy and its plugin-owned history."},
 				{Method: http.MethodPost, Path: "/" + pluginName + "/keys/reset", Description: "Resets one Key's plugin-owned usage while preserving its policy."},
 				{Method: http.MethodGet, Path: "/" + pluginName + "/records", Description: "Lists compact usage buckets for one Key."},
@@ -636,10 +664,12 @@ func pickAuth(raw []byte) ([]byte, error) {
 	for _, candidate := range request.Candidates {
 		candidates = append(candidates, quota.SchedulerCandidate{AuthID: candidate.ID, Priority: candidate.Priority, Status: candidate.Status})
 	}
-	admission := engine.AdmitCaptured(
+	admission := engine.AdmitCapturedFromIP(
 		apiKeyFromHeaders(request.Options.Headers),
 		request.Model,
 		headerValue(request.Options.Headers, requestContextHeader),
+		// Nginx must overwrite this header and be the only reachable CPA ingress.
+		headerValue(request.Options.Headers, "X-Real-IP"),
 		nowUTC(),
 		candidates,
 	)
@@ -752,6 +782,20 @@ func handleManagement(raw []byte) ([]byte, error) {
 			return fail(http.StatusBadRequest, err)
 		}
 		engine.LogOperational("info", "key_policy_saved", "Key 额度设置已保存", "", policy.ID)
+		return managementJSON(http.StatusOK, map[string]any{"key": policy})
+	case path == apiPrefix+"/keys/ip-whitelist" && method == http.MethodPut:
+		var payload ipWhitelistRequest
+		if err := json.Unmarshal(request.Body, &payload); err != nil {
+			return fail(http.StatusBadRequest, errors.New("invalid JSON body"))
+		}
+		if strings.TrimSpace(payload.KeyID) == "" {
+			return fail(http.StatusBadRequest, errors.New("key_id is required"))
+		}
+		policy, err := engine.UpdatePolicyIPWhitelist(payload.KeyID, payload.Entries, payload.Enabled)
+		if err != nil {
+			return fail(http.StatusBadRequest, err)
+		}
+		engine.LogOperational("info", "key_ip_whitelist_saved", "Key IP 白名单已保存", "", policy.ID)
 		return managementJSON(http.StatusOK, map[string]any{"key": policy})
 	case path == apiPrefix+"/keys" && method == http.MethodDelete:
 		if err := engine.DeletePolicy(strings.TrimSpace(request.Query.Get("key_id"))); err != nil {
@@ -910,11 +954,23 @@ func handleManagement(raw []byte) ([]byte, error) {
 		if err := json.Unmarshal(request.Body, &payload); err != nil {
 			return fail(http.StatusBadRequest, errors.New("invalid JSON body"))
 		}
+		previous := make(map[string]struct{})
+		for _, rate := range engine.ModelRates() {
+			previous[rate.Model] = struct{}{}
+		}
 		rates, err := engine.ReplaceModelRates(payload.Rates)
 		if err != nil {
 			return fail(http.StatusBadRequest, err)
 		}
 		engine.LogOperational("info", "model_rates_saved", fmt.Sprintf("模型费率已更新：%d 个模型", len(rates)), "", "")
+		if engine.ModelRateSyncStatus().Enabled {
+			for _, rate := range rates {
+				if _, existed := previous[rate.Model]; !existed {
+					engine.RequestModelRateSync()
+					break
+				}
+			}
+		}
 		return managementJSON(http.StatusOK, map[string]any{"rates": rates, "sync": engine.ModelRateSyncStatus()})
 	case path == apiPrefix+"/rate-sync" && method == http.MethodPut:
 		var payload rateSyncRequest
@@ -1094,7 +1150,7 @@ func errorEnvelope(code, message string) []byte {
 // real HTTP 429 rather than an indistinguishable scheduler failure.
 func admissionStatusCode(code string) int {
 	switch code {
-	case "model_not_allowed", "key_disabled", "access_schedule_closed", "content_forbidden":
+	case "model_not_allowed", "key_disabled", "access_schedule_closed", "ip_not_allowed", "content_forbidden":
 		return http.StatusForbidden
 	case "quota_scheduler_candidates_required", "quota_unavailable", "quota_persistence_unavailable", "model_rate_not_configured":
 		// SQLite/accounting recovery is a temporary plugin outage, never a
