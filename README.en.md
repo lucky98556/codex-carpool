@@ -182,16 +182,16 @@ After restarting CPA, confirm that **Usage Management** is registered and enable
 
 ### Optional: custom plugin-store source
 
-To find this plugin in CPA's plugin store on Linux amd64, add the source under the existing `plugins:` section of `config.yaml`; do not create a second `plugins:` section:
+To find this plugin in CPA's plugin store on Linux amd64, add this repository's dedicated source under the existing `plugins:` section of `config.yaml`; do not create a second `plugins:` section:
 
 ```yaml
 plugins:
   enabled: true
   store-sources:
-    - "https://raw.githubusercontent.com/lucky98556/CLIProxyAPI-Plugins-Store/codex/add-codex-carpool/registry.json"
+    - "https://raw.githubusercontent.com/lucky98556/codex-carpool/main/registry.json"
 ```
 
-Reload CPA's configuration and refresh the plugin store. This URL points to a temporary branch from an unmerged PR. It contains a copy of the official registry, so other plugins may appear twice, and the URL may stop working if the branch is deleted. It is not an official store listing. The current release provides a Linux amd64 package only; installation from this source is unavailable on other platforms. Keep your existing `plugins.dir` and `plugins.configs` settings rather than replacing them with this abbreviated example.
+Reload CPA's configuration and refresh the plugin store. This URL lists only this plugin, not a copy of the official registry; it is a custom source, not an official store listing. The current release provides a Linux amd64 package only; installation from this source is unavailable on other platforms. Keep your existing `plugins.dir` and `plugins.configs` settings rather than replacing them with this abbreviated example.
 
 ## First setup
 

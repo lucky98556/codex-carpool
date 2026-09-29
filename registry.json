@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "plugins": [
+    {
+      "id": "codex-carpool",
+      "name": "用量管理",
+      "description": "为 CPA 提供按 Key 的 Token 与美元用量统计、5 小时和 7 天额度、模型与 IP 访问限制、内容拦截及请求日志。",
+      "author": "lucky98556",
+      "repository": "https://github.com/lucky98556/codex-carpool",
+      "logo": "https://raw.githubusercontent.com/lucky98556/codex-carpool/main/docs/logo.png",
+      "homepage": "https://github.com/lucky98556/codex-carpool",
+      "license": "MIT",
+      "tags": ["Management", "Usage", "Quota", "Billing"]
+    }
+  ]
+}
