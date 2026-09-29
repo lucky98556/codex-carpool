@@ -278,6 +278,12 @@ type normalizedUsageTokens struct {
 	Output     int64
 }
 
+type usageBucketSemantics struct {
+	independentCache          bool
+	separateReasoning         bool
+	reasoningIncludedInOutput bool
+}
+
 func nonNegativeTokenSum(left, right int64) int64 {
 	left, right = max(left, 0), max(right, 0)
 	if left > math.MaxInt64-right {
@@ -286,45 +292,119 @@ func nonNegativeTokenSum(left, right int64) int64 {
 	return left + right
 }
 
+func usageBucketSemanticsFor(record CompletedUsage) usageBucketSemantics {
+	provider := strings.ToLower(strings.TrimSpace(record.Provider))
+	executor := strings.ToLower(strings.TrimSpace(record.ExecutorType))
+	semantics := strings.TrimSpace(provider + " " + executor)
+	if semantics == "" {
+		// Callbacks may omit routing metadata; never let a model name
+		// override the semantics of a known executor or provider.
+		semantics = strings.ToLower(strings.TrimSpace(record.Model))
+	}
+	// Match CPA's provider/executor precedence: compatibility routes use
+	// subset accounting even when the upstream model is Claude or Gemini.
+	compat := executor == "openaicompatexecutor" || provider == "openai-compatibility" || strings.HasPrefix(provider, "openai-compatible-")
+	if compat {
+		return usageBucketSemantics{reasoningIncludedInOutput: true}
+	}
+	if strings.Contains(semantics, "claude") || strings.Contains(semantics, "anthropic") {
+		return usageBucketSemantics{independentCache: true, separateReasoning: true}
+	}
+	if containsAny(semantics, "gemini", "aistudio", "antigravity", "vertex", "interaction") {
+		return usageBucketSemantics{separateReasoning: true}
+	}
+	if containsAny(semantics, "openai", "codex", "gpt-", "xai", "grok", "kimi", "qwen", "deepseek", "openrouter") {
+		return usageBucketSemantics{reasoningIncludedInOutput: true}
+	}
+	return usageBucketSemantics{}
+}
+
 func normalizedBillableUsage(record CompletedUsage) normalizedUsageTokens {
-	provider := strings.ToLower(strings.TrimSpace(record.Provider + " " + record.ExecutorType + " " + record.Model))
+	semantics := usageBucketSemanticsFor(record)
 	cacheRead, cacheWrite := max(record.CacheReadTokens, 0), max(record.CacheCreationTokens, 0)
 	if cacheRead == 0 && cacheWrite == 0 {
 		cacheRead = max(record.CachedTokens, 0)
 	}
 	cached := nonNegativeTokenSum(cacheRead, cacheWrite)
 	input, output := max(record.InputTokens, 0), max(record.OutputTokens, 0)
-	independentCache := strings.Contains(provider, "claude") || strings.Contains(provider, "anthropic")
-	separateReasoning := independentCache
-	reasoningIncludedInOutput := false
-	for _, marker := range []string{"openai", "codex", "gpt-", "xai", "grok", "kimi", "qwen", "deepseek", "openrouter"} {
-		if strings.Contains(provider, marker) {
-			reasoningIncludedInOutput = true
-			break
-		}
-	}
-	for _, marker := range []string{"gemini", "aistudio", "antigravity", "vertex", "interaction"} {
-		if strings.Contains(provider, marker) {
-			separateReasoning = true
-			break
-		}
-	}
-	if !independentCache {
+	if !semantics.independentCache {
 		input -= cached
 		if input < 0 {
 			input = 0
 		}
 	}
 	reasoning := int64(0)
-	if separateReasoning {
+	if semantics.separateReasoning {
 		reasoning = max(record.ReasoningTokens, 0)
-	} else if reasoningIncludedInOutput {
+	} else if semantics.reasoningIncludedInOutput {
 		// OpenAI-compatible providers report reasoning as an output subset.
 		// Split it out so a dedicated rate never charges the same tokens again.
 		reasoning = min(max(record.ReasoningTokens, 0), output)
 		output -= reasoning
 	}
 	return normalizedUsageTokens{Input: input, CacheRead: cacheRead, CacheWrite: cacheWrite, Cached: cached, Reasoning: reasoning, Output: output}
+}
+
+func containsAny(value string, markers ...string) bool {
+	for _, marker := range markers {
+		if strings.Contains(value, marker) {
+			return true
+		}
+	}
+	return false
+}
+
+func usageBreakdownTotal(tokens normalizedUsageTokens) int64 {
+	accounted := nonNegativeTokenSum(tokens.Input, tokens.Cached)
+	accounted = nonNegativeTokenSum(accounted, tokens.Reasoning)
+	return nonNegativeTokenSum(accounted, tokens.Output)
+}
+
+func usageBucketsContradict(record CompletedUsage, tokens normalizedUsageTokens) bool {
+	semantics := usageBucketSemanticsFor(record)
+	// Only enforce overlap rules for a recognized token convention.
+	if (semantics.reasoningIncludedInOutput || semantics.separateReasoning && !semantics.independentCache) && tokens.Cached > max(record.InputTokens, 0) {
+		return true
+	}
+	return semantics.reasoningIncludedInOutput && record.ReasoningTokens > record.OutputTokens
+}
+
+func partialUsageRateAmbiguous(rate ModelRate, record CompletedUsage, tokens normalizedUsageTokens, missing int64, knownCost costBreakdown) bool {
+	if missing <= 0 || len(rate.Tiers) == 0 {
+		return false
+	}
+	// Missing Tokens may be input. Check every crossed tier, since the first
+	// and last tiers may share a price while an intermediate tier differs.
+	knownContext := nonNegativeTokenSum(tokens.Input, tokens.Cached)
+	upperContext := nonNegativeTokenSum(knownContext, missing)
+	for _, tier := range rate.Tiers {
+		if tier.ContextOverTokens <= knownContext || tier.ContextOverTokens > upperContext {
+			continue
+		}
+		candidate := tokens
+		candidate.Input = nonNegativeTokenSum(candidate.Input, tier.ContextOverTokens-knownContext)
+		selectedRate := rateForCompletedUsage(rate, record, candidate)
+		selectedCost := costBreakdownFromBillableMicros(selectedRate, tokens.Input, tokens.CacheRead, tokens.CacheWrite, tokens.Reasoning, tokens.Output)
+		if selectedCost != knownCost {
+			return true
+		}
+	}
+	return false
+}
+
+func pricedUsageForTotal(rate ModelRate, record CompletedUsage, total int64) (costBreakdown, normalizedUsageTokens, string) {
+	cost, tokens := costBreakdownForUsage(rate, record)
+	accounted := usageBreakdownTotal(tokens)
+	if usageBucketsContradict(record, tokens) || accounted > total {
+		return costBreakdown{}, normalizedUsageTokens{}, "_unpriced_tokens"
+	}
+	if accounted < total {
+		if partialUsageRateAmbiguous(rate, record, tokens, total-accounted, cost) {
+			return costBreakdown{}, tokens, "_unpriced_tokens_tier"
+		}
+		return cost, tokens, "_unpriced_tokens"
+	}
+	return cost, tokens, ""
 }
 
 func costBreakdownForUsage(rate ModelRate, record CompletedUsage) (costBreakdown, normalizedUsageTokens) {

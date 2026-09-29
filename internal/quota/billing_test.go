@@ -478,6 +478,9 @@ func TestProviderTokenSemanticsProduceNonOverlappingBillableBuckets(t *testing.T
 	}{
 		{name: "Codex cached and reasoning subsets", reasoningUsesOutput: true, record: CompletedUsage{Provider: "codex", InputTokens: 1_000_000, CacheReadTokens: 250_000, OutputTokens: 100_000, ReasoningTokens: 50_000}, wantTokens: normalizedUsageTokens{Input: 750_000, CacheRead: 250_000, Cached: 250_000, Reasoning: 50_000, Output: 50_000}, wantCost: 12_125_000},
 		{name: "OpenAI-compatible cached and reasoning subsets", reasoningUsesOutput: true, record: CompletedUsage{ExecutorType: "OpenAICompatExecutor", InputTokens: 1_000_000, CacheReadTokens: 250_000, OutputTokens: 100_000, ReasoningTokens: 50_000}, wantTokens: normalizedUsageTokens{Input: 750_000, CacheRead: 250_000, Cached: 250_000, Reasoning: 50_000, Output: 50_000}, wantCost: 12_125_000},
+		{name: "OpenAI-compatible Claude model remains subset", reasoningUsesOutput: true, record: CompletedUsage{Provider: "openai-compatibility", ExecutorType: "OpenAICompatExecutor", Model: "claude-sonnet-4-6", InputTokens: 1_000_000, CacheReadTokens: 250_000, OutputTokens: 100_000, ReasoningTokens: 50_000}, wantTokens: normalizedUsageTokens{Input: 750_000, CacheRead: 250_000, Cached: 250_000, Reasoning: 50_000, Output: 50_000}, wantCost: 12_125_000},
+		{name: "OpenAI-compatible Gemini model remains subset", reasoningUsesOutput: true, record: CompletedUsage{Provider: "openai-compatibility", ExecutorType: "OpenAICompatExecutor", Model: "gemini-3-pro", InputTokens: 1_000_000, CacheReadTokens: 250_000, OutputTokens: 100_000, ReasoningTokens: 50_000}, wantTokens: normalizedUsageTokens{Input: 750_000, CacheRead: 250_000, Cached: 250_000, Reasoning: 50_000, Output: 50_000}, wantCost: 12_125_000},
+		{name: "OpenRouter Claude model remains subset", reasoningUsesOutput: true, record: CompletedUsage{Provider: "openrouter", Model: "claude-sonnet-4-6", InputTokens: 1_000_000, CacheReadTokens: 250_000, OutputTokens: 100_000, ReasoningTokens: 50_000}, wantTokens: normalizedUsageTokens{Input: 750_000, CacheRead: 250_000, Cached: 250_000, Reasoning: 50_000, Output: 50_000}, wantCost: 12_125_000},
 		{name: "xAI reasoning is an output subset", reasoningUsesOutput: true, record: CompletedUsage{Provider: "xai", InputTokens: 1_000_000, CacheReadTokens: 250_000, OutputTokens: 100_000, ReasoningTokens: 50_000}, wantTokens: normalizedUsageTokens{Input: 750_000, CacheRead: 250_000, Cached: 250_000, Reasoning: 50_000, Output: 50_000}, wantCost: 12_125_000},
 		{name: "DeepSeek reasoning is an output subset", reasoningUsesOutput: true, record: CompletedUsage{Provider: "deepseek", InputTokens: 1_000_000, CacheReadTokens: 250_000, OutputTokens: 100_000, ReasoningTokens: 50_000}, wantTokens: normalizedUsageTokens{Input: 750_000, CacheRead: 250_000, Cached: 250_000, Reasoning: 50_000, Output: 50_000}, wantCost: 12_125_000},
 		{name: "Claude independent cache and reasoning", record: CompletedUsage{ExecutorType: "ClaudeExecutor", InputTokens: 1_000_000, CacheReadTokens: 250_000, OutputTokens: 100_000, ReasoningTokens: 50_000}, wantTokens: normalizedUsageTokens{Input: 1_000_000, CacheRead: 250_000, Cached: 250_000, Reasoning: 50_000, Output: 100_000}, wantCost: 14_625_000},
@@ -510,6 +513,90 @@ func TestCompletedUsageFallbackUsesProviderSpecificNonOverlappingBuckets(t *test
 				t.Fatalf("completedUsageUnits() = %d, want %d", got, test.want)
 			}
 		})
+	}
+}
+
+func TestUsageBreakdownTotalIncludesAllBillableComponents(t *testing.T) {
+	tokens := normalizedUsageTokens{Input: 80, Cached: 20, Output: 10}
+	if got := usageBreakdownTotal(tokens); got != 110 {
+		t.Fatalf("usageBreakdownTotal() = %d, want 110", got)
+	}
+}
+
+func TestUsageRejectsOnlyContradictoryProviderBuckets(t *testing.T) {
+	rate, err := normalizeModelRate(ModelRate{Model: "test", InputUSDPerMillion: 1, CacheReadUSDPerMillion: 1, OutputUSDPerMillion: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, test := range []struct {
+		name       string
+		record     CompletedUsage
+		total      int64
+		wantReject bool
+	}{
+		{name: "subset cache exceeds input", record: CompletedUsage{Provider: "openai", InputTokens: 100, CacheReadTokens: 150, OutputTokens: 20}, total: 170, wantReject: true},
+		{name: "subset reasoning exceeds output", record: CompletedUsage{Provider: "openai", InputTokens: 100, OutputTokens: 20, ReasoningTokens: 30}, total: 120, wantReject: true},
+		{name: "independent cache may exceed input", record: CompletedUsage{Provider: "anthropic", InputTokens: 100, CacheReadTokens: 150, OutputTokens: 20}, total: 270},
+		{name: "separate reasoning may exceed output", record: CompletedUsage{Provider: "gemini", InputTokens: 100, OutputTokens: 20, ReasoningTokens: 30}, total: 150},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			cost, tokens, reason := pricedUsageForTotal(rate, test.record, test.total)
+			if test.wantReject {
+				if cost.Total != 0 || tokens != (normalizedUsageTokens{}) || reason != "_unpriced_tokens" {
+					t.Fatalf("contradictory usage = cost %+v, tokens %+v, reason %q", cost, tokens, reason)
+				}
+			} else if cost.Total <= 0 || usageBreakdownTotal(tokens) != test.total || reason != "" {
+				t.Fatalf("valid provider usage = cost %+v, tokens %+v, reason %q", cost, tokens, reason)
+			}
+		})
+	}
+}
+
+func TestPartialUsageOnlyWithholdsCostWhenTierChangesKnownBuckets(t *testing.T) {
+	rate, err := normalizeModelRate(ModelRate{
+		Model: "tiered", InputUSDPerMillion: 2,
+		Tiers: []ModelRateTier{{ContextOverTokens: 200_000, InputUSDPerMillion: 6}},
+		Modes: []ModelRateMode{{Name: "priority", ServiceTier: "priority", InputUSDPerMillion: 4}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, test := range []struct {
+		name        string
+		input       int64
+		total       int64
+		serviceTier string
+		wantCost    int64
+		wantReason  string
+	}{
+		{name: "missing cannot cross tier", input: 100_000, total: 120_000, wantCost: 200_000, wantReason: "_unpriced_tokens"},
+		{name: "missing may change tier", input: 190_000, total: 210_000, wantReason: "_unpriced_tokens_tier"},
+		{name: "explicit mode fixes price", input: 190_000, total: 210_000, serviceTier: "priority", wantCost: 760_000, wantReason: "_unpriced_tokens"},
+		{name: "complete tiered usage", input: 210_000, total: 210_000, wantCost: 1_260_000},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			cost, tokens, reason := pricedUsageForTotal(rate, CompletedUsage{Provider: "openai", InputTokens: test.input, ServiceTier: test.serviceTier}, test.total)
+			if cost.Total != test.wantCost || tokens.Input != test.input || reason != test.wantReason {
+				t.Fatalf("tiered partial usage = cost %+v, tokens %+v, reason %q; want cost %d, input %d, reason %q", cost, tokens, reason, test.wantCost, test.input, test.wantReason)
+			}
+		})
+	}
+}
+
+func TestPartialUsageChecksIntermediateTierWhenEndpointsMatch(t *testing.T) {
+	rate, err := normalizeModelRate(ModelRate{
+		Model: "tiered", InputUSDPerMillion: 2,
+		Tiers: []ModelRateTier{
+			{ContextOverTokens: 100_000, InputUSDPerMillion: 6},
+			{ContextOverTokens: 200_000, InputUSDPerMillion: 2},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cost, tokens, reason := pricedUsageForTotal(rate, CompletedUsage{Provider: "openai", InputTokens: 50_000}, 250_000)
+	if cost.Total != 0 || tokens.Input != 50_000 || reason != "_unpriced_tokens_tier" {
+		t.Fatalf("intermediate tier ambiguity = cost %+v, tokens %+v, reason %q", cost, tokens, reason)
 	}
 }
 

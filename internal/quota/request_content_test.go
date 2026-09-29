@@ -161,6 +161,133 @@ func TestTrackOnlyRegisteredKeyStillRequiresConfiguredModelRate(t *testing.T) {
 	}
 }
 
+func TestTotalOnlyUsageKeepsTokensWithoutInventingDollarCost(t *testing.T) {
+	engine := newTestEngine(t, KeyPolicy{ID: "managed", Name: "Managed", Enabled: false})
+	defer func() { _ = engine.Close() }()
+	now := time.Now().UTC().Truncate(time.Second)
+	if _, err := engine.ReplaceModelRates([]ModelRate{{Model: "gpt-5", InputUSDPerMillion: 10, OutputUSDPerMillion: 20}}); err != nil {
+		t.Fatal(err)
+	}
+	if admission := engine.Admit("managed-key", "gpt-5", now); !admission.Bypass {
+		t.Fatalf("track-only admission = %+v", admission)
+	}
+	engine.RecordUsage(CompletedUsage{APIKey: "managed-key", Model: "gpt-5", Provider: "openai", RequestedAt: now, Generate: true, TotalTokens: 120_000})
+	logs, err := engine.DecisionLogs("managed", 10)
+	if err != nil || len(logs) != 1 || logs[0].Units != 120_000 || logs[0].CostMicros != 0 || !strings.Contains(logs[0].Reason, "_unpriced_tokens") {
+		t.Fatalf("total-only request log = %+v, err=%v", logs, err)
+	}
+	analysis, err := engine.UsageAnalysis("managed", now.Add(-time.Hour), now.Add(time.Hour), time.UTC, "hour")
+	if err != nil || analysis.TotalTokens != 120_000 || analysis.CostMicros != 0 {
+		t.Fatalf("total-only usage analysis = %+v, err=%v", analysis, err)
+	}
+	if spend := engine.Summary(now).Keys[0].DollarSpend.FiveHour.SpentUSD; spend != 0 {
+		t.Fatalf("unpriced usage charged budget $%v, want 0", spend)
+	}
+}
+
+func TestEnforcedKeyAlsoMarksTotalOnlyUsageUnpriced(t *testing.T) {
+	engine := newTestEngine(t, KeyPolicy{ID: "managed", Name: "Managed", Enabled: true, FiveHourBudgetUSD: 1})
+	defer func() { _ = engine.Close() }()
+	now := time.Now().UTC().Truncate(time.Second)
+	if _, err := engine.ReplaceModelRates([]ModelRate{{Model: "gpt-5", InputUSDPerMillion: 10, OutputUSDPerMillion: 20}}); err != nil {
+		t.Fatal(err)
+	}
+	admission := engine.Admit("managed-key", "gpt-5", now, []SchedulerCandidate{{AuthID: "account-a"}})
+	if !admission.Allowed {
+		t.Fatalf("managed admission = %+v", admission)
+	}
+	engine.RecordUsage(CompletedUsage{APIKey: "managed-key", AuthID: admission.AuthID, Model: "gpt-5", Provider: "openai", RequestedAt: now, Generate: true, TotalTokens: 120_000})
+	logs, err := engine.DecisionLogs("managed", 10)
+	if err != nil || len(logs) != 1 || logs[0].Units != 120_000 || logs[0].CostMicros != 0 || !strings.Contains(logs[0].Reason, "_unpriced_tokens") {
+		t.Fatalf("managed total-only request log = %+v, err=%v", logs, err)
+	}
+	if spend := engine.Summary(now).Keys[0].DollarSpend.FiveHour.SpentUSD; spend != 0 {
+		t.Fatalf("unpriced managed usage charged budget $%v, want 0", spend)
+	}
+}
+
+func TestPartialUsagePricesKnownBucketsForBothKeyModes(t *testing.T) {
+	for _, managed := range []bool{false, true} {
+		t.Run(map[bool]string{false: "track_only", true: "budget_enforced"}[managed], func(t *testing.T) {
+			engine := newTestEngine(t, KeyPolicy{ID: "managed", Name: "Managed", Enabled: managed, FiveHourBudgetUSD: 0.5})
+			defer func() { _ = engine.Close() }()
+			now := time.Now().UTC().Truncate(time.Second)
+			if _, err := engine.ReplaceModelRates([]ModelRate{{Model: "gpt-5", InputUSDPerMillion: 10, OutputUSDPerMillion: 20}}); err != nil {
+				t.Fatal(err)
+			}
+			admission := engine.Admit("managed-key", "gpt-5", now, []SchedulerCandidate{{AuthID: "account-a"}})
+			if (managed && !admission.Allowed) || (!managed && !admission.Bypass) {
+				t.Fatalf("admission = %+v", admission)
+			}
+			engine.RecordUsage(CompletedUsage{APIKey: "managed-key", AuthID: admission.AuthID, Model: "gpt-5", Provider: "openai", RequestedAt: now, Generate: true, InputTokens: 100_000, TotalTokens: 120_000})
+			logs, err := engine.DecisionLogs("managed", 10)
+			if err != nil || len(logs) != 1 || logs[0].Units != 120_000 || logs[0].InputTokens != 100_000 || logs[0].OutputTokens != 0 || logs[0].CostMicros != 1_000_000 || !strings.Contains(logs[0].Reason, "_unpriced_tokens") {
+				t.Fatalf("partial usage request log = %+v, err=%v", logs, err)
+			}
+			analysis, err := engine.UsageAnalysis("managed", now.Add(-time.Hour), now.Add(time.Hour), time.UTC, "hour")
+			if err != nil || analysis.TotalTokens != 120_000 || analysis.InputTokens != 100_000 || analysis.OutputTokens != 0 || analysis.CostMicros != 1_000_000 {
+				t.Fatalf("partial usage analysis = %+v, err=%v", analysis, err)
+			}
+			if spend := engine.Summary(now).Keys[0].DollarSpend.FiveHour.SpentUSD; spend != 1 {
+				t.Fatalf("known input cost charged $%v, want $1", spend)
+			}
+			next := engine.Admit("managed-key", "gpt-5", now.Add(time.Second), []SchedulerCandidate{{AuthID: "account-a"}})
+			if (managed && (next.Allowed || next.Code != "key_dollar_budget_exhausted")) || (!managed && !next.Bypass) {
+				t.Fatalf("admission after partial known cost = %+v", next)
+			}
+		})
+	}
+}
+
+func TestTierAmbiguousPartialUsageKeepsKnownTokensWithoutCharging(t *testing.T) {
+	engine := newTestEngine(t, KeyPolicy{ID: "managed", Name: "Managed", Enabled: true, FiveHourBudgetUSD: 0.5})
+	defer func() { _ = engine.Close() }()
+	now := time.Now().UTC().Truncate(time.Second)
+	if _, err := engine.ReplaceModelRates([]ModelRate{{
+		Model: "gpt-5", InputUSDPerMillion: 2,
+		Tiers: []ModelRateTier{{ContextOverTokens: 200_000, InputUSDPerMillion: 6}},
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	admission := engine.Admit("managed-key", "gpt-5", now, []SchedulerCandidate{{AuthID: "account-a"}})
+	if !admission.Allowed {
+		t.Fatalf("admission = %+v", admission)
+	}
+	engine.RecordUsage(CompletedUsage{APIKey: "managed-key", AuthID: admission.AuthID, Model: "gpt-5", Provider: "openai", RequestedAt: now, Generate: true, InputTokens: 190_000, TotalTokens: 210_000})
+	logs, err := engine.DecisionLogs("managed", 10)
+	if err != nil || len(logs) != 1 || logs[0].Units != 210_000 || logs[0].InputTokens != 190_000 || logs[0].CostMicros != 0 || !strings.Contains(logs[0].Reason, "_unpriced_tokens_tier") {
+		t.Fatalf("tier-ambiguous request log = %+v, err=%v", logs, err)
+	}
+	analysis, err := engine.UsageAnalysis("managed", now.Add(-time.Hour), now.Add(time.Hour), time.UTC, "hour")
+	if err != nil || analysis.TotalTokens != 210_000 || analysis.InputTokens != 190_000 || analysis.CostMicros != 0 {
+		t.Fatalf("tier-ambiguous usage analysis = %+v, err=%v", analysis, err)
+	}
+	if spend := engine.Summary(now).Keys[0].DollarSpend.FiveHour.SpentUSD; spend != 0 {
+		t.Fatalf("tier-ambiguous usage charged budget $%v, want 0", spend)
+	}
+}
+
+func TestUsageBucketsAboveCPATotalAreNotCharged(t *testing.T) {
+	engine := newTestEngine(t, KeyPolicy{ID: "managed", Name: "Managed", Enabled: true, FiveHourBudgetUSD: 2})
+	defer func() { _ = engine.Close() }()
+	now := time.Now().UTC().Truncate(time.Second)
+	if _, err := engine.ReplaceModelRates([]ModelRate{{Model: "gpt-5", InputUSDPerMillion: 10}}); err != nil {
+		t.Fatal(err)
+	}
+	admission := engine.Admit("managed-key", "gpt-5", now, []SchedulerCandidate{{AuthID: "account-a"}})
+	if !admission.Allowed {
+		t.Fatalf("admission = %+v", admission)
+	}
+	engine.RecordUsage(CompletedUsage{APIKey: "managed-key", AuthID: admission.AuthID, Model: "gpt-5", Provider: "openai", RequestedAt: now, Generate: true, InputTokens: 120_000, TotalTokens: 100_000})
+	logs, err := engine.DecisionLogs("managed", 10)
+	if err != nil || len(logs) != 1 || logs[0].Units != 100_000 || logs[0].InputTokens != 0 || logs[0].CostMicros != 0 || !strings.Contains(logs[0].Reason, "_unpriced_tokens") {
+		t.Fatalf("contradictory usage request log = %+v, err=%v", logs, err)
+	}
+	if spend := engine.Summary(now).Keys[0].DollarSpend.FiveHour.SpentUSD; spend != 0 {
+		t.Fatalf("contradictory usage charged budget $%v, want 0", spend)
+	}
+}
+
 func TestFullyDisabledKeyBlocksEveryModelAndKeepsRequestLog(t *testing.T) {
 	engine := newTestEngine(t, KeyPolicy{ID: "managed", Name: "Managed", Enabled: true, Disabled: true})
 	defer func() { _ = engine.Close() }()

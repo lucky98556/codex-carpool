@@ -847,8 +847,9 @@ func (engine *Engine) RecordUsage(record CompletedUsage) {
 	}
 	normalizedTokens := normalizedBillableUsage(record)
 	cost := costBreakdown{}
+	pricingReason := ""
 	if units > 0 {
-		cost, normalizedTokens = costBreakdownForUsage(marker.Rate, record)
+		cost, normalizedTokens, pricingReason = pricedUsageForTotal(marker.Rate, record, units)
 		normalizedTokens.Output = nonNegativeTokenSum(normalizedTokens.Output, normalizedTokens.Reasoning)
 		cost.Output = nonNegativeTokenSum(cost.Output, cost.Reasoning)
 		if !engine.chargeDollarSpend(keyID, requestedAt.Truncate(time.Millisecond), cost.Total) {
@@ -871,6 +872,7 @@ func (engine *Engine) RecordUsage(record CompletedUsage) {
 	} else if record.Failed {
 		decision, reason, status = "failed", "upstream_failed_with_actual_usage", record.FailureStatus
 	}
+	reason += pricingReason
 	if policy.Disabled {
 		// A request admitted just before the operator disabled the Key may still
 		// receive its terminal CPA callback; preserve that actual result in logs.
@@ -908,8 +910,9 @@ func (engine *Engine) recordUnenforcedUsage(marker pendingRequest, authID string
 	}
 	normalizedTokens := normalizedBillableUsage(record)
 	cost := costBreakdown{}
+	pricingReason := ""
 	if units > 0 {
-		cost, normalizedTokens = costBreakdownForUsage(marker.Rate, record)
+		cost, normalizedTokens, pricingReason = pricedUsageForTotal(marker.Rate, record, units)
 		normalizedTokens.Output = nonNegativeTokenSum(normalizedTokens.Output, normalizedTokens.Reasoning)
 		cost.Output = nonNegativeTokenSum(cost.Output, cost.Reasoning)
 		if !engine.chargeDollarSpend(keyID, requestedAt.Truncate(time.Millisecond), cost.Total) {
@@ -930,6 +933,7 @@ func (engine *Engine) recordUnenforcedUsage(marker pendingRequest, authID string
 	} else if record.Failed {
 		decision, reason, status = "failed", "upstream_failed_with_actual_usage_without_budget_enforcement", record.FailureStatus
 	}
+	reason += pricingReason
 	if status < 0 {
 		status = 0
 	}
