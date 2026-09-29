@@ -1,5 +1,8 @@
 # codex-carpool
 
+<!-- 插件中心与项目主页使用同一 Logo。 -->
+<img src="docs/logo.png" alt="用量管理 Logo" width="96" height="96">
+
 **简体中文** | [English](README.en.md)
 
 > 面向 [CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI) / CPA 的 Linux 原生全模型 Key 美元计量插件。

@@ -1,5 +1,8 @@
 # codex-carpool
 
+<!-- Keep the repository preview aligned with the plugin-store logo. -->
+<img src="docs/logo.png" alt="Usage Management logo" width="96" height="96">
+
 [简体中文](README.md) | **English**
 
 > A Linux-native CLIProxyAPI / CPA plugin that meters managed API Keys across all CPA models in USD.
