@@ -179,6 +179,19 @@ plugins:
 
 重启 CPA 后，在插件管理中确认“用量管理”已注册、已启用；打开面板并用一条测试请求核对日志和实际 Token 结算。旧版共享库应在确认新文件和数据库备份后移出插件扫描目录，确保同名插件只加载一个版本；数据目录保持可写。
 
+### 可选：自定义插件源
+
+如需在 Linux amd64 的 CPA 插件商店中查找本插件，可在现有 `config.yaml` 的 `plugins:` 段下添加自定义源；不要重复创建第二个 `plugins:` 段：
+
+```yaml
+plugins:
+  enabled: true
+  store-sources:
+    - "https://raw.githubusercontent.com/lucky98556/CLIProxyAPI-Plugins-Store/codex/add-codex-carpool/registry.json"
+```
+
+保存并重新加载 CPA 配置后刷新插件商店。此地址是未合并 PR 的临时分支，包含官方目录的副本，可能重复显示其他插件，也可能随分支删除而失效；它不是官方上架地址。当前 Release 仅提供 Linux amd64 安装包，其他平台无法从此源安装。已有的 `plugins.dir` 和 `plugins.configs` 配置请保留，不要用上面的示例覆盖。
+
 ## 初次配置
 
 1. 在 CPA 管理面板打开“用量管理”，或访问 `/v0/resource/plugins/codex-carpool/panel`。
