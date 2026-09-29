@@ -97,7 +97,7 @@ created_at INTEGER NOT NULL,updated_at INTEGER NOT NULL);`); err != nil {
 	}
 }
 
-func TestOpenSeedsDefaultModelRatesOnlyForEmptyRateCard(t *testing.T) {
+func TestOpenLeavesRateCardEmptyAndPreservesOperatorChanges(t *testing.T) {
 	if runtime.GOOS != "linux" {
 		t.Skip("native plugin database lock is Linux-only")
 	}
@@ -113,37 +113,13 @@ func TestOpenSeedsDefaultModelRatesOnlyForEmptyRateCard(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Open() error = %v", err)
 	}
-	rates := engine.ModelRates()
-	if len(rates) != len(defaultModelRates) {
+	if rates := engine.ModelRates(); len(rates) != 0 {
 		_ = engine.Close()
-		t.Fatalf("seeded rate count = %d, want %d", len(rates), len(defaultModelRates))
+		t.Fatalf("fresh database rates = %+v, want none", rates)
 	}
-	for _, expected := range defaultModelRates {
-		actual, exists := engine.modelRate(expected.Model)
-		if !exists || actual.InputUSDPerMillion != expected.InputUSDPerMillion || actual.CacheReadUSDPerMillion != expected.CacheReadUSDPerMillion || actual.CacheWriteUSDPerMillion != expected.CacheWriteUSDPerMillion || actual.OutputUSDPerMillion != expected.OutputUSDPerMillion {
-			_ = engine.Close()
-			t.Fatalf("seeded rate for %q = %+v, exists=%t", expected.Model, actual, exists)
-		}
-	}
-	if _, err := engine.ReplaceModelRates(rates); err != nil {
+	if stored, err := engine.store.ListModelRates(); err != nil || len(stored) != 0 {
 		_ = engine.Close()
-		t.Fatalf("saving untouched seed rates: %v", err)
-	}
-	for _, rate := range engine.ModelRates() {
-		if rate.Source != "" || rate.RateCardOnly {
-			_ = engine.Close()
-			t.Fatalf("untouched seed became a manual sync candidate: %+v", rate)
-		}
-	}
-	editedSeeds := engine.ModelRates()
-	editedSeeds[0].InputUSDPerMillion++
-	if _, err := engine.ReplaceModelRates(editedSeeds); err != nil {
-		_ = engine.Close()
-		t.Fatalf("editing a seed rate: %v", err)
-	}
-	if edited, exists := engine.modelRate(editedSeeds[0].Model); !exists || edited.Source != "manual" {
-		_ = engine.Close()
-		t.Fatalf("edited seed did not become a manual rate: %+v, exists=%t", edited, exists)
+		t.Fatalf("fresh database stored rates = %+v, err=%v, want none", stored, err)
 	}
 	if _, err := engine.ReplaceModelRates([]ModelRate{{
 		Model: "operator-custom", InputUSDPerMillion: 3, CacheReadUSDPerMillion: 0.3, CacheWriteUSDPerMillion: 3, OutputUSDPerMillion: 12,
@@ -161,10 +137,60 @@ func TestOpenSeedsDefaultModelRatesOnlyForEmptyRateCard(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Open(reopened) error = %v", err)
 	}
-	defer func() { _ = reopened.Close() }()
-	rates = reopened.ModelRates()
-	if len(rates) != 1 || rates[0].Model != "operator-custom" || !rates[0].RateCardOnly || rates[0].OutputUSDPerMillion != 12 || len(rates[0].Tiers) != 1 || len(rates[0].Modes) != 1 {
+	rates := reopened.ModelRates()
+	if len(rates) != 1 || rates[0].Model != "operator-custom" || rates[0].Source != "manual" || !rates[0].RateCardOnly || rates[0].OutputUSDPerMillion != 12 || len(rates[0].Tiers) != 1 || len(rates[0].Modes) != 1 {
+		_ = reopened.Close()
 		t.Fatalf("reopened rates = %+v, want preserved operator rate only", rates)
+	}
+	if _, err := reopened.ReplaceModelRates(nil); err != nil {
+		_ = reopened.Close()
+		t.Fatalf("clearing rate card: %v", err)
+	}
+	if err := reopened.Close(); err != nil {
+		t.Fatalf("Close(reopened) error = %v", err)
+	}
+	emptyAgain, err := Open(config)
+	if err != nil {
+		t.Fatalf("Open(after clear) error = %v", err)
+	}
+	defer func() { _ = emptyAgain.Close() }()
+	if rates := emptyAgain.ModelRates(); len(rates) != 0 {
+		t.Fatalf("cleared rate card after restart = %+v, want none", rates)
+	}
+}
+
+func TestOpenKeepsRatesFromOlderDatabase(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("native plugin database lock is Linux-only")
+	}
+	config, err := NormalizeConfig(Config{
+		DatabasePath:    filepath.Join(t.TempDir(), "codex-carpool.db"),
+		KeyHMACSecret:   "test-only-hmac-secret-with-at-least-32-characters",
+		RecordRetention: "168h",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := OpenStore(config.DatabasePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Older releases could create this source-less row during first startup.
+	if err := store.ReplaceModelRates([]ModelRate{{Model: "gpt-5.6-sol", InputUSDPerMillion: 7}}); err != nil {
+		_ = store.Close()
+		t.Fatal(err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	engine, err := Open(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = engine.Close() }()
+	rates := engine.ModelRates()
+	if len(rates) != 1 || rates[0].Model != "gpt-5.6-sol" || rates[0].InputUSDPerMillion != 7 || rates[0].Source != "" {
+		t.Fatalf("existing rate after startup = %+v, want unchanged legacy rate", rates)
 	}
 }
 

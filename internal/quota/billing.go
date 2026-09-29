@@ -11,22 +11,6 @@ import (
 
 const usdMicrosPerDollar int64 = 1_000_000
 
-// defaultModelRates is written only for a brand-new, unconfigured rate card.
-// Operators retain full control once any rate exists in SQLite. Codex Spark has
-// no separately published API rate, so its seed intentionally follows the
-// published GPT-5.3-Codex text-token rate until an operator changes it.
-// GPT Image 1.5's per-image charges cannot be represented by the current
-// Token callback, so its seed covers reported text Tokens only.
-// GPT Image 2 is an explicit operator-requested zero-rate exception.
-var defaultModelRates = []ModelRate{
-	{Model: "gpt-5.3-codex-spark", InputUSDPerMillion: 1.75, CacheReadUSDPerMillion: 0.175, ReasoningUsesOutput: true, OutputUSDPerMillion: 14},
-	{Model: "gpt-5.4-mini", InputUSDPerMillion: 0.75, CacheReadUSDPerMillion: 0.075, ReasoningUsesOutput: true, OutputUSDPerMillion: 4.5},
-	{Model: "gpt-5.6-sol", InputUSDPerMillion: 5, CacheReadUSDPerMillion: 0.5, CacheWriteUSDPerMillion: 6.25, ReasoningUsesOutput: true, OutputUSDPerMillion: 30},
-	{Model: "gpt-5.6-luna", InputUSDPerMillion: 0.2, CacheReadUSDPerMillion: 0.02, CacheWriteUSDPerMillion: 0.25, ReasoningUsesOutput: true, OutputUSDPerMillion: 1.2},
-	{Model: "gpt-image-1.5", InputUSDPerMillion: 5, CacheReadUSDPerMillion: 1.25, OutputUSDPerMillion: 10},
-	{Model: "gpt-image-2"},
-}
-
 type ModelRateTier struct {
 	ContextOverTokens          int64   `json:"context_over_tokens"`
 	InputUSDPerMillion         float64 `json:"input_usd_per_million"`
@@ -631,7 +615,7 @@ func (engine *Engine) ReplaceModelRates(rates []ModelRate) ([]ModelRate, error) 
 			return nil, err
 		}
 		if strings.TrimSpace(rate.Source) == "" {
-			// Keep an untouched seed distinct from an operator-edited rate.
+			// Preserve legacy source-less rates until the operator changes them.
 			old.UpdatedAt, rate.UpdatedAt = time.Time{}, time.Time{}
 			if !existed || old.Source != "" || !reflect.DeepEqual(old, rate) {
 				rate.Source = "manual"

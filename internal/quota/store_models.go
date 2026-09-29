@@ -88,44 +88,6 @@ func (store *Store) ListModelRates() ([]ModelRate, error) {
 	return items, rows.Err()
 }
 
-// SeedDefaultModelRates initializes seed data only when the rate card is empty.
-func (store *Store) SeedDefaultModelRates(rates []ModelRate) error {
-	store.mu.Lock()
-	defer store.mu.Unlock()
-	var count int
-	if err := store.db.QueryRow(`SELECT COUNT(*) FROM model_rates`).Scan(&count); err != nil {
-		return err
-	}
-	if count > 0 {
-		return nil
-	}
-	tx, err := store.db.Begin()
-	if err != nil {
-		return err
-	}
-	defer func() { _ = tx.Rollback() }()
-	statement, err := tx.Prepare(`INSERT INTO model_rates(model,input_micros_per_million,cached_micros_per_million,output_micros_per_million,profile_json,updated_at) VALUES(?,?,?,?,?,?)`)
-	if err != nil {
-		return err
-	}
-	defer statement.Close()
-	now := time.Now().UTC().UnixMilli()
-	for _, rate := range rates {
-		normalized, err := normalizeModelRate(rate)
-		if err != nil {
-			return err
-		}
-		profile, err := json.Marshal(normalized)
-		if err != nil {
-			return err
-		}
-		if _, err := statement.Exec(normalized.Model, normalized.inputMicrosPerMillion, normalized.cacheReadMicrosPerMillion, normalized.outputMicrosPerMillion, string(profile), now); err != nil {
-			return err
-		}
-	}
-	return tx.Commit()
-}
-
 func (store *Store) ReplaceModelRates(rates []ModelRate) error {
 	normalized := make([]ModelRate, 0, len(rates))
 	seen := make(map[string]struct{}, len(rates))

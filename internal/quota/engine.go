@@ -356,10 +356,6 @@ func Open(cfg RuntimeConfig) (*Engine, error) {
 		_ = store.Close()
 		return nil, err
 	}
-	if err := store.SeedDefaultModelRates(defaultModelRates); err != nil {
-		_ = store.Close()
-		return nil, err
-	}
 	rates, err := store.ListModelRates()
 	if err != nil {
 		_ = store.Close()

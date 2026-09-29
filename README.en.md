@@ -95,18 +95,9 @@ flowchart LR
     L --> W["Write both windows, analytics, and logs"]
 ```
 
-## Seed rate card
+## Model rate configuration
 
-When the database has no model rates, the first startup seeds these entries once. Saving the rate card later is fully operator-owned and never overwritten on startup:
-
-- `gpt-5.3-codex-spark`
-- `gpt-5.4-mini`
-- `gpt-5.6-sol`
-- `gpt-5.6-luna`
-- `gpt-image-1.5`
-- `gpt-image-2` (all rates are `0`)
-
-All values use USD per million Tokens. Edit them in **Rate settings** after synchronizing CPA's model catalog.
+A new database starts without model rates. Configure and save the rates you need in **Rate settings**, or explicitly enable models.dev price synchronization. Prices use USD per million Tokens. Models without a configured rate are blocked; an explicitly all-zero rate means free. Removing the seed does not clear existing rates; enabled price synchronization continues to update rates under its existing rules.
 
 ## Data and security boundary
 
