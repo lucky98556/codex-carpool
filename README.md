@@ -17,6 +17,19 @@
 
 CPA 仍负责认证文件和实际调度。未添加的 Key 保持 CPA 原有行为，外部流量不会写入插件，也不会被分摊到任何已添加 Key。
 
+### 通过自定义插件源安装
+
+如需在 Linux amd64 的 CPA 插件商店中安装本插件，可在现有 `config.yaml` 的 `plugins:` 段下添加本仓库的专属插件源；不要重复创建第二个 `plugins:` 段：
+
+```yaml
+plugins:
+  enabled: true
+  store-sources:
+    - "https://raw.githubusercontent.com/lucky98556/codex-carpool/main/registry.json"
+```
+
+保存并重新加载 CPA 配置后刷新插件商店，搜索“用量管理”并点击“安装”。此地址只列出本插件，不会复制官方目录；它是自定义源，不代表已在官方插件中心上架。当前 Release 仅提供 Linux amd64 安装包，其他平台无法从此源安装。已有的 `plugins.dir` 和 `plugins.configs` 配置请保留，不要用上面的示例覆盖。
+
 ## 界面预览
 
 截图来自中文界面；额度、模型和用量以实际部署环境为准。
@@ -178,19 +191,6 @@ plugins:
 ```
 
 重启 CPA 后，在插件管理中确认“用量管理”已注册、已启用；打开面板并用一条测试请求核对日志和实际 Token 结算。旧版共享库应在确认新文件和数据库备份后移出插件扫描目录，确保同名插件只加载一个版本；数据目录保持可写。
-
-### 可选：自定义插件源
-
-如需在 Linux amd64 的 CPA 插件商店中查找本插件，可在现有 `config.yaml` 的 `plugins:` 段下添加本仓库的专属插件源；不要重复创建第二个 `plugins:` 段：
-
-```yaml
-plugins:
-  enabled: true
-  store-sources:
-    - "https://raw.githubusercontent.com/lucky98556/codex-carpool/main/registry.json"
-```
-
-保存并重新加载 CPA 配置后刷新插件商店。此地址只列出本插件，不会复制官方目录；它是自定义源，不代表已在官方插件中心上架。当前 Release 仅提供 Linux amd64 安装包，其他平台无法从此源安装。已有的 `plugins.dir` 和 `plugins.configs` 配置请保留，不要用上面的示例覆盖。
 
 ## 初次配置
 

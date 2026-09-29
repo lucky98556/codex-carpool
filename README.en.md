@@ -17,6 +17,19 @@
 
 CPA remains responsible for credentials and routing. A Key that has not been added keeps CPA's normal behavior. External traffic is ignored and can never be attributed to an added Key.
 
+### Install from a custom plugin-store source
+
+To install this plugin from CPA's plugin store on Linux amd64, add this repository's dedicated source under the existing `plugins:` section of `config.yaml`; do not create a second `plugins:` section:
+
+```yaml
+plugins:
+  enabled: true
+  store-sources:
+    - "https://raw.githubusercontent.com/lucky98556/codex-carpool/main/registry.json"
+```
+
+Reload CPA's configuration, refresh the plugin store, search for **Usage Management**, and click **Install**. This URL lists only this plugin, not a copy of the official registry; it is a custom source, not an official store listing. The current release provides a Linux amd64 package only; installation from this source is unavailable on other platforms. Keep your existing `plugins.dir` and `plugins.configs` settings rather than replacing them with this abbreviated example.
+
 ## Screenshots
 
 These screenshots show the Chinese interface; budgets, models, and usage depend on the deployment.
@@ -179,19 +192,6 @@ plugins:
 ```
 
 After restarting CPA, confirm that **Usage Management** is registered and enabled in Plugin Management. Open the panel and send a test request to verify the log and actual Token settlement. After verifying the new file and database backup, move any older same-ID shared libraries out of the scan directory. Keep the data directory writable.
-
-### Optional: custom plugin-store source
-
-To find this plugin in CPA's plugin store on Linux amd64, add this repository's dedicated source under the existing `plugins:` section of `config.yaml`; do not create a second `plugins:` section:
-
-```yaml
-plugins:
-  enabled: true
-  store-sources:
-    - "https://raw.githubusercontent.com/lucky98556/codex-carpool/main/registry.json"
-```
-
-Reload CPA's configuration and refresh the plugin store. This URL lists only this plugin, not a copy of the official registry; it is a custom source, not an official store listing. The current release provides a Linux amd64 package only; installation from this source is unavailable on other platforms. Keep your existing `plugins.dir` and `plugins.configs` settings rather than replacing them with this abbreviated example.
 
 ## First setup
 
